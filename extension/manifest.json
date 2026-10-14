@@ -1,0 +1,29 @@
+{
+  "manifest_version": 3,
+  "name": "My Self-Hosted TikTok HQ Studio",
+  "version": "2.0.0",
+  "description": "Connects TikTok Studio directly to your own Self-Hosted FFmpeg HQ Server & locks Privacy.",
+  "permissions": [
+    "storage",
+    "activeTab",
+    "scripting"
+  ],
+  "host_permissions": [
+    "*://*.tiktok.com/*",
+    "http://*/*",
+    "https://*/*"
+  ],
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.tiktok.com/tiktokstudio/*",
+        "*://*.tiktok.com/creator-center/*"
+      ],
+      "js": ["content.js"],
+      "run_at": "document_start"
+    }
+  ]
+}
