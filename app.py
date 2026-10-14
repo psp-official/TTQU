@@ -11,7 +11,51 @@ app = Flask(__name__)
 CORS(app)
 
 UPLOAD_DIR = "/tmp/ttqu_uploads"
+CONFIG_FILE = "/tmp/ttqu_remote_config.json"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
+
+ADMIN_KEY = os.environ.get("ADMIN_KEY", "xuqing123")
+
+DEFAULT_REMOTE_CONFIG = {
+    "blocked": os.environ.get("EXTENSION_BLOCKED", "false").lower() == "true",
+    "update_required": os.environ.get("UPDATE_REQUIRED", "false").lower() == "true",
+    "enableV7Patch": os.environ.get("ENABLE_V7_PATCH", "true").lower() != "false",
+    "min_version": os.environ.get("MIN_VERSION", "6.1.0"),
+    "blacklisted_versions": [],
+    "info_message": os.environ.get("INFO_MESSAGE", "UPDATE REQUIRED"),
+    "update_message": os.environ.get(
+        "UPDATE_MESSAGE",
+        "New version is available or maintenance is in progress. Please update your extension."
+    ),
+    "update_url": os.environ.get("UPDATE_URL", "https://www.tiktok.com/@xuqingxinnocent"),
+    "tele": os.environ.get("UPDATE_BTN_TEXT", "Download Update"),
+    "update_url_2": os.environ.get("UPDATE_URL_2", ""),
+    "wa": os.environ.get("UPDATE_BTN_TEXT_2", "Contact Admin")
+}
+
+
+def load_remote_config():
+    cfg = dict(DEFAULT_REMOTE_CONFIG)
+    if os.path.exists(CONFIG_FILE):
+        try:
+            with open(CONFIG_FILE, "r", encoding="utf-8") as f:
+                saved = json.load(f)
+                if isinstance(saved, dict):
+                    cfg.update(saved)
+        except Exception:
+            pass
+    return cfg
+
+
+def save_remote_config(new_cfg):
+    cfg = load_remote_config()
+    cfg.update(new_cfg)
+    try:
+        with open(CONFIG_FILE, "w", encoding="utf-8") as f:
+            json.dump(cfg, f, indent=2, ensure_ascii=False)
+    except Exception:
+        pass
+    return cfg
 
 
 def probe_video_info(filepath):
@@ -62,7 +106,6 @@ def apply_server_side_hq_bypass_atoms(filepath):
         limit = len(data) - 92
         i = 0
         while i < limit:
-            # 1. Patch 'tkhd' atom resolution to 1080x1920 (or 1920x1080)
             if data[i:i+4] == b"tkhd":
                 version = data[i + 4]
                 width_offset = (i + 4 + 84) if version == 1 else (i + 4 + 72)
@@ -80,18 +123,15 @@ def apply_server_side_hq_bypass_atoms(filepath):
                             struct.pack_into(">I", data, width_offset, 1920 << 16)
                             struct.pack_into(">I", data, height_offset, 1080 << 16)
                 i += 80
-            # 2. Patch 'avcC' atom level to 4.1 (0x29 = 41) for 120 FPS bypass
             elif data[i:i+4] == b"avcC":
-                # avcC layout: 'avcC' (4 bytes) + configurationVersion (1) + AVCProfileIndication (1) + profile_compatibility (1) + AVCLevelIndication (1)
                 if i + 8 < len(data) and data[i + 4] == 1:
                     level_byte = data[i + 7]
-                    if level_byte > 0x29:  # e.g. 0x2A (Level 4.2 for 120fps) or 0x33 (Level 5.1 for 4K)
+                    if level_byte > 0x29:
                         data[i + 7] = 0x29
                 i += 8
             else:
                 i += 1
 
-        # 3. Append unique 24-byte 'free' box
         random_seed = os.urandom(16)
         free_box = struct.pack(">I4s16s", 24, b"free", random_seed)
         data.extend(free_box)
@@ -102,10 +142,6 @@ def apply_server_side_hq_bypass_atoms(filepath):
         print(f"[warn] apply_server_side_hq_bypass_atoms error: {e}")
 
 
-# V7Patch script served to the Extension:
-# 1. Disables Browser WebCodecs & AudioEncoder re-compression when High Quality Bypass is active
-# 2. Locks user's selected Privacy (Only You / Friends / Everyone) & spoofs resolution/fps metadata in upload JSON
-# 3. Normalizes MP4 'tkhd' (1080p) and 'avcC' (Level 4.1 for 120FPS) atoms & injects unique 'free' box
 V7_PATCH_SCRIPT = r"""
 (function() {
   'use strict';
@@ -215,12 +251,10 @@ V7_PATCH_SCRIPT = r"""
     };
   }
 
-  // Helper: Patch MP4 'tkhd' atom (1080p) and 'avcC' atom (Level 4.1 for 120FPS bypass)
   function patchMp4AtomsFor1080pAnd120Fps(bytes) {
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     const limit = bytes.byteLength - 92;
     for (let i = 0; i < limit; i++) {
-      // 'tkhd'
       if (bytes[i] === 0x74 && bytes[i+1] === 0x6B && bytes[i+2] === 0x68 && bytes[i+3] === 0x64) {
         const version = bytes[i + 4];
         const widthOffset = version === 1 ? (i + 4 + 84) : (i + 4 + 72);
@@ -241,7 +275,6 @@ V7_PATCH_SCRIPT = r"""
           }
         }
       }
-      // 'avcC' -> spoof AVCLevelIndication to 0x29 (Level 4.1) for 120FPS / 4K streams
       else if (bytes[i] === 0x61 && bytes[i+1] === 0x76 && bytes[i+2] === 0x63 && bytes[i+3] === 0x43) {
         if (i + 8 < bytes.byteLength && bytes[i + 4] === 1) {
           if (bytes[i + 7] > 0x29) {
@@ -252,7 +285,6 @@ V7_PATCH_SCRIPT = r"""
     }
   }
 
-  // 3. V7Patch Function: Byte-level MP4 1080P/2K/4K/120FPS Header Normalizer + Unique Box Injector
   window.V7Patch = async function V7Patch(file) {
     const ab = await file.arrayBuffer();
     if (!window.__XUQING_BYPASS_ACTIVE__) {
@@ -264,7 +296,6 @@ V7_PATCH_SCRIPT = r"""
       patchMp4AtomsFor1080pAnd120Fps(bytes);
     } catch (_) {}
 
-    // If server already appended 'free' box at the end, return directly
     if (bytes.length >= 24 &&
         bytes[bytes.length - 20] === 0x66 &&
         bytes[bytes.length - 19] === 0x72 &&
@@ -278,7 +309,7 @@ V7_PATCH_SCRIPT = r"""
 
     const freeBox = new Uint8Array(24);
     freeBox[0] = 0x00; freeBox[1] = 0x00; freeBox[2] = 0x00; freeBox[3] = 0x18;
-    freeBox[4] = 0x66; freeBox[5] = 0x72; freeBox[6] = 0x65; freeBox[7] = 0x65; // 'free'
+    freeBox[4] = 0x66; freeBox[5] = 0x72; freeBox[6] = 0x65; freeBox[7] = 0x65;
     freeBox.set(randomSeed, 8);
 
     const out = new Uint8Array(bytes.length + freeBox.length);
@@ -306,8 +337,6 @@ INJECT_SCRIPT = r"""
 })();
 """
 
-# Watermark script: Automatically adds "#xuqingxinnocent • Quality Uploaded ✓ @xuqingxinnocent"
-# to the TikTok Studio caption editor when Watermark is turned ON!
 WATERMARK_SCRIPT = r"""
 (function() {
   'use strict';
@@ -439,50 +468,203 @@ WATERMARK_SCRIPT = r"""
 })();
 """
 
+ADMIN_HTML = r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>xuqingxinnocent — Remote Extension Control Panel</title>
+  <style>
+    body {
+      background: #0a0a0b; color: #f5f5f5; font-family: system-ui, -apple-system, sans-serif;
+      display: flex; justify-content: center; padding: 32px 16px; margin: 0;
+    }
+    .panel {
+      width: 100%; max-width: 460px; background: #111214;
+      border: 1px solid rgba(0, 255, 106, 0.2); border-radius: 18px; padding: 24px;
+    }
+    h2 { margin: 0 0 6px; font-size: 18px; color: #00FF6A; }
+    p.sub { margin: 0 0 20px; font-size: 12px; color: #8b92a0; }
+    .row { margin-bottom: 14px; }
+    label { display: block; font-size: 12px; font-weight: 600; margin-bottom: 6px; color: #cfd5e0; }
+    input[type="text"], input[type="password"], textarea {
+      width: 100%; box-sizing: border-box; background: #181a1f; border: 1px solid #2a2e37;
+      color: #fff; border-radius: 10px; padding: 10px 12px; font-size: 13px;
+    }
+    .toggle-row {
+      display: flex; align-items: center; justify-content: space-between;
+      background: #181a1f; padding: 12px 14px; border-radius: 12px; margin-bottom: 10px;
+      border: 1px solid #232730;
+    }
+    .btn {
+      width: 100%; background: #00FF6A; color: #0a0a0b; border: none; border-radius: 12px;
+      padding: 12px; font-size: 14px; font-weight: 700; cursor: pointer; margin-top: 10px;
+    }
+    .status { margin-top: 12px; font-size: 12px; text-align: center; color: #00FF6A; }
+  </style>
+</head>
+<body>
+  <div class="panel">
+    <h2>XUQINGXINNOCENT ADMIN</h2>
+    <p class="sub">Remote Extension Lock, Force Update & Bypass Switch</p>
+
+    <div class="row">
+      <label>Admin Key (Default: xuqing123)</label>
+      <input type="password" id="adminKey" value="xuqing123">
+    </div>
+
+    <div class="toggle-row">
+      <span>🔴 Block / Force Update Overlay</span>
+      <input type="checkbox" id="blocked">
+    </div>
+
+    <div class="toggle-row">
+      <span>⚡ Enable High Quality Bypass (V7Patch)</span>
+      <input type="checkbox" id="enableV7Patch" checked>
+    </div>
+
+    <div class="row">
+      <label>Minimum Allowed Version (e.g. 6.1.0 — set to 6.2.0 to force update)</label>
+      <input type="text" id="min_version" value="6.1.0">
+    </div>
+
+    <div class="row">
+      <label>Badge Title (info_message)</label>
+      <input type="text" id="info_message" value="UPDATE REQUIRED">
+    </div>
+
+    <div class="row">
+      <label>Popup Message (update_message)</label>
+      <textarea id="update_message" rows="3"></textarea>
+    </div>
+
+    <div class="row">
+      <label>Primary Button URL (update_url)</label>
+      <input type="text" id="update_url">
+    </div>
+
+    <div class="row">
+      <label>Primary Button Label (tele)</label>
+      <input type="text" id="tele" value="Download Update">
+    </div>
+
+    <button class="btn" onclick="saveConfig()">Save & Apply to All Users</button>
+    <div class="status" id="statusMsg"></div>
+  </div>
+
+  <script>
+    async function loadConfig() {
+      const res = await fetch('/api/checkup');
+      const data = await res.json();
+      document.getElementById('blocked').checked = !!data.blocked;
+      document.getElementById('enableV7Patch').checked = data.enableV7Patch !== false;
+      document.getElementById('min_version').value = data.min_version || '6.1.0';
+      document.getElementById('info_message').value = data.info_message || 'UPDATE REQUIRED';
+      document.getElementById('update_message').value = data.update_message || '';
+      document.getElementById('update_url').value = data.update_url || '';
+      document.getElementById('tele').value = data.tele || 'Download Update';
+    }
+    async function saveConfig() {
+      const payload = {
+        key: document.getElementById('adminKey').value,
+        blocked: document.getElementById('blocked').checked,
+        update_required: document.getElementById('blocked').checked,
+        enableV7Patch: document.getElementById('enableV7Patch').checked,
+        min_version: document.getElementById('min_version').value.trim(),
+        info_message: document.getElementById('info_message').value.trim(),
+        update_message: document.getElementById('update_message').value.trim(),
+        update_url: document.getElementById('update_url').value.trim(),
+        tele: document.getElementById('tele').value.trim()
+      };
+      const res = await fetch('/api/admin/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      const out = await res.json();
+      document.getElementById('statusMsg').textContent = out.ok ? '✓ Saved & Live!' : ('Error: ' + out.error);
+    }
+    loadConfig();
+  </script>
+</body>
+</html>
+"""
+
+
 @app.route("/", methods=["GET"])
 def index():
+    cfg = load_remote_config()
     return jsonify({
         "status": "online",
         "server": "xuqingxinnocent Self-Hosted 1080P/2K/4K/120FPS HQ Bypass Server",
         "supported_specs": ["1080P", "2K (1440P)", "4K (2160P)", "60FPS", "90FPS", "120FPS"],
-        "endpoints": ["/api/checkup", "/api/control", "/api/patch", "/api/inject", "/api/sign", "/api/transcode"],
+        "admin_panel": "/admin",
+        "extension_blocked": cfg.get("blocked", False),
+        "bypass_enabled": cfg.get("enableV7Patch", True),
+        "min_version": cfg.get("min_version", "6.1.0"),
+        "endpoints": ["/api/checkup", "/api/control", "/api/patch", "/api/inject", "/api/sign", "/api/transcode", "/admin"],
         "timestamp": datetime.utcnow().isoformat() + "Z"
     })
 
+
+@app.route("/admin", methods=["GET"])
+def admin_panel():
+    return Response(ADMIN_HTML, mimetype="text/html")
+
+
+@app.route("/api/admin/config", methods=["POST"])
+def api_admin_config():
+    body = request.get_json(silent=True) or {}
+    if body.get("key") != ADMIN_KEY:
+        return jsonify({"ok": False, "error": "Invalid Admin Key"}), 403
+
+    updates = {}
+    for k in ["blocked", "update_required", "enableV7Patch", "min_version", "info_message", "update_message", "update_url", "tele", "update_url_2", "wa"]:
+        if k in body:
+            updates[k] = body[k]
+
+    cfg = save_remote_config(updates)
+    return jsonify({"ok": True, "config": cfg})
+
+
 @app.route("/api/checkup", methods=["GET", "POST"])
 def api_checkup():
-    return jsonify({
-        "blocked": False,
-        "update_required": False,
-        "min_version": "1.0.0",
-        "blacklisted_versions": [],
-        "info_message": "XUQINGXINNOCENT 1080P/2K/4K/120FPS ACTIVE",
-        "update_message": "Connected to xuqingxinnocent 120FPS HQ server."
-    })
+    cfg = load_remote_config()
+    return jsonify(cfg)
+
 
 @app.route("/api/control", methods=["GET", "POST"])
 def api_control():
+    cfg = load_remote_config()
     return jsonify({
-        "enableV7Patch": True,
-        "blocked": False,
+        "enableV7Patch": cfg.get("enableV7Patch", True),
+        "blocked": cfg.get("blocked", False),
         "maxFps": 120,
         "resolutions": ["1080p", "2k", "4k"]
     })
+
 
 @app.route("/api/patch", methods=["GET", "POST"])
 def api_patch():
     return Response(V7_PATCH_SCRIPT, mimetype="application/javascript")
 
+
 @app.route("/api/inject", methods=["GET", "POST"])
 def api_inject():
     return Response(INJECT_SCRIPT, mimetype="application/javascript")
+
 
 @app.route("/api/sign", methods=["GET", "POST"])
 def api_sign():
     return Response(WATERMARK_SCRIPT, mimetype="application/javascript")
 
+
 @app.route("/api/transcode", methods=["POST"])
 def api_transcode():
+    cfg = load_remote_config()
+    if cfg.get("blocked") or not cfg.get("enableV7Patch", True):
+        return jsonify({"error": "Extension bypass is currently disabled by administrator."}), 403
+
     if "video" not in request.files:
         return jsonify({"error": "No video file provided"}), 400
 
@@ -492,19 +674,14 @@ def api_transcode():
     out_path = os.path.join(UPLOAD_DIR, f"out_{job_id}.mp4")
     video_file.save(in_path)
 
-    # Probe input resolution (1080P / 2K / 4K) and frame rate (30 / 60 / 90 / 120 FPS)
     vinfo = probe_video_info(in_path)
     in_fps = vinfo["fps"]
     is_high_fps = in_fps > 60.5
 
-    # Build video filter:
-    # - Lanczos scaling from 1080P/2K/4K to exact 1080p with Luma Unsharp filter
-    # - Preserve native frame rate up to 120 FPS (if >120 FPS, cap cleanly at 120 FPS)
     vf_chain = "scale='if(gt(iw,ih),1920,1080)':-2:flags=lanczos,unsharp=3:3:0.35:3:3:0.0,format=yuv420p"
     if in_fps > 120.5:
         vf_chain += ",fps=120"
 
-    # Use Level 4.2 during encode if >60 FPS (up to 120 FPS), then spoof 'avcC' atom to Level 4.1 (0x29) afterward!
     h264_level = "4.2" if is_high_fps else "4.1"
     gop_size = "120" if is_high_fps else "60"
     max_bitrate = "14M" if is_high_fps else "12M"
@@ -541,10 +718,6 @@ def api_transcode():
 
     try:
         subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        # Apply Server-Side Binary Atom Patch:
-        # - 'tkhd' 1080p lock
-        # - 'avcC' Level 4.1 (0x29) spoof so 120FPS passes TikTok's encoder check without downsampling
-        # - unique 24-byte 'free' box
         apply_server_side_hq_bypass_atoms(out_path)
     except subprocess.CalledProcessError as e:
         if os.path.exists(in_path):
@@ -561,6 +734,7 @@ def api_transcode():
         return response
 
     return send_file(out_path, mimetype="video/mp4", as_attachment=True, download_name="output_1080p_120fps_xuqingxinnocent.mp4")
+
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
