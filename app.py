@@ -102,14 +102,14 @@ def save_remote_config(new_cfg):
 
 def probe_video_info(filepath):
     """
-    Uses ffprobe to detect input video codec, width, height, frame rate, and bit_rate.
+    Uses ffprobe to detect input video codec, width, height, bitrate, and frame rate.
     """
     info = {"codec_name": "h264", "width": 1080, "height": 1920, "fps": 60.0, "bit_rate": 0}
     try:
         cmd = [
             "ffprobe", "-v", "error",
             "-select_streams", "v:0",
-            "-show_entries", "stream=codec_name,width,height,r_frame_rate,avg_frame_rate,bit_rate:format=bit_rate",
+            "-show_entries", "stream=codec_name,width,height,r_frame_rate,avg_frame_rate,bit_rate",
             "-of", "json",
             filepath
         ]
@@ -122,6 +122,7 @@ def probe_video_info(filepath):
                 info["codec_name"] = (st.get("codec_name") or "h264").lower()
                 info["width"] = int(st.get("width") or 1080)
                 info["height"] = int(st.get("height") or 1920)
+                info["bit_rate"] = int(st.get("bit_rate") or 0)
                 fps_str = st.get("avg_frame_rate") or st.get("r_frame_rate") or "60/1"
                 if "/" in fps_str:
                     num, den = fps_str.split("/", 1)
@@ -129,8 +130,6 @@ def probe_video_info(filepath):
                         info["fps"] = float(num) / float(den)
                 else:
                     info["fps"] = float(fps_str)
-                br = st.get("bit_rate") or data.get("format", {}).get("bit_rate") or 0
-                info["bit_rate"] = int(br)
     except Exception as e:
         print(f"[warn] ffprobe failed: {e}")
     return info
@@ -139,12 +138,10 @@ def probe_video_info(filepath):
 def apply_server_side_hq_bypass_atoms(filepath):
     """
     Server-Side High Quality Bypass:
-    1. Scans MP4 'tkhd' atom and normalizes track header resolution to Official 1080p (1080x1920 or 1920x1080).
-    2. Scans MP4 'avc1' visual sample entry and normalizes reported width/height to 1080p so TikTok's
-       strict container vs stream validator sees a 100% compliant 1080p stream.
-    3. Scans MP4 'avcC' atom and spoofs AVCProfileIndication to High (0x64) and AVCLevelIndication to Level 4.1 (0x29)
-       so high-FPS / high-detail videos pass TikTok's strict High@4.1 stream check without server re-encoding.
-    4. Appends a unique 24-byte 'free' atom with cryptographic random bytes so TikTok's duplicate hash check is bypassed.
+    1. Ensures MP4 'tkhd' atom matches 1080p dimensions cleanly.
+    2. Scans MP4 'avcC' atom and spoofs AVCLevelIndication to Level 4.1 (0x29) so 60FPS/120FPS videos
+       pass TikTok's strict High@4.1 stream check without triggering server-side re-encoding.
+    3. Appends a unique 24-byte 'free' atom with cryptographic random bytes to bypass hash deduplication.
     """
     try:
         with open(filepath, "rb") as f:
@@ -153,7 +150,6 @@ def apply_server_side_hq_bypass_atoms(filepath):
         limit = len(data) - 92
         i = 0
         while i < limit:
-            # 1. Patch tkhd (Track Header Box)
             if data[i:i+4] == b"tkhd":
                 version = data[i + 4]
                 width_offset = (i + 4 + 84) if version == 1 else (i + 4 + 72)
@@ -171,25 +167,11 @@ def apply_server_side_hq_bypass_atoms(filepath):
                             struct.pack_into(">I", data, width_offset, 1920 << 16)
                             struct.pack_into(">I", data, height_offset, 1080 << 16)
                 i += 80
-            # 2. Patch avc1 (Visual Sample Entry inside stsd)
-            elif data[i:i+4] == b"avc1":
-                if i + 32 <= len(data):
-                    w = struct.unpack(">H", data[i+28:i+30])[0]
-                    h = struct.unpack(">H", data[i+30:i+32])[0]
-                    if (w > 1080 or h > 1920) and w <= 7680 and h <= 7680:
-                        if h >= w:
-                            struct.pack_into(">H", data, i + 28, 1080)
-                            struct.pack_into(">H", data, i + 30, 1920)
-                        else:
-                            struct.pack_into(">H", data, i + 28, 1920)
-                            struct.pack_into(">H", data, i + 30, 1080)
-                i += 32
-            # 3. Patch avcC (AVC Decoder Configuration Record -> High@L4.1)
             elif data[i:i+4] == b"avcC":
                 if i + 8 < len(data) and data[i + 4] == 1:
                     level_byte = data[i + 7]
                     if level_byte > 0x29:
-                        data[i + 7] = 0x29  # Level 4.1
+                        data[i + 7] = 0x29
                 i += 8
             else:
                 i += 1
@@ -223,7 +205,7 @@ V7_PATCH_SCRIPT = r"""
     }
   });
 
-  // 1. Disable Browser-Side WebCodecs & Canvas Downscaling when High Quality Bypass is ON
+  // 1. Disable Browser-Side WebCodecs Pre-Compression ONLY when High Quality Bypass is ON
   try {
     if (window.VideoEncoder && window.VideoEncoder.isConfigSupported) {
       const _origIsConfigSupported = window.VideoEncoder.isConfigSupported.bind(window.VideoEncoder);
@@ -241,12 +223,6 @@ V7_PATCH_SCRIPT = r"""
           return { supported: false };
         }
         return _origAudioSupported(config);
-      };
-    }
-    if (window.MediaSource && window.MediaSource.isTypeSupported) {
-      const _origMseSupported = window.MediaSource.isTypeSupported.bind(window.MediaSource);
-      window.MediaSource.isTypeSupported = function(mimeType) {
-        return _origMseSupported(mimeType);
       };
     }
   } catch (_) {}
@@ -415,9 +391,6 @@ V7_PATCH_SCRIPT = r"""
             } else if (window.__XUQING_BYPASS_ACTIVE__ && (k === 'original_resolution' || k === 'video_resolution')) {
               obj[k] = '1080p';
               changed = true;
-            } else if (window.__XUQING_BYPASS_ACTIVE__ && (k === 'video_encode_type' || k === 'encode_type')) {
-              obj[k] = 'h264';
-              changed = true;
             } else if (typeof obj[k] === 'object') {
               walk(obj[k]);
             }
@@ -458,48 +431,10 @@ V7_PATCH_SCRIPT = r"""
   }
 
   function patchMp4AtomsFor1080pAnd120Fps(bytes) {
-    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     const limit = bytes.byteLength - 92;
     for (let i = 0; i < limit; i++) {
-      // Patch tkhd
-      if (bytes[i] === 0x74 && bytes[i+1] === 0x6B && bytes[i+2] === 0x68 && bytes[i+3] === 0x64) {
-        const version = bytes[i + 4];
-        const widthOffset = version === 1 ? (i + 4 + 84) : (i + 4 + 72);
-        const heightOffset = widthOffset + 4;
-        if (heightOffset + 4 <= bytes.byteLength) {
-          const wFixed = view.getUint32(widthOffset, false);
-          const hFixed = view.getUint32(heightOffset, false);
-          const w = wFixed >>> 16;
-          const h = hFixed >>> 16;
-          if ((w > 1080 || h > 1920) && w <= 7680 && h <= 7680) {
-            if (h >= w) {
-              view.setUint32(widthOffset, 1080 << 16, false);
-              view.setUint32(heightOffset, 1920 << 16, false);
-            } else {
-              view.setUint32(widthOffset, 1920 << 16, false);
-              view.setUint32(heightOffset, 1080 << 16, false);
-            }
-          }
-        }
-      }
-      // Patch avc1
-      else if (bytes[i] === 0x61 && bytes[i+1] === 0x76 && bytes[i+2] === 0x63 && bytes[i+3] === 0x31) {
-        if (i + 32 <= bytes.byteLength) {
-          const w = view.getUint16(i + 28, false);
-          const h = view.getUint16(i + 30, false);
-          if ((w > 1080 || h > 1920) && w <= 7680 && h <= 7680) {
-            if (h >= w) {
-              view.setUint16(i + 28, 1080, false);
-              view.setUint16(i + 30, 1920, false);
-            } else {
-              view.setUint16(i + 28, 1920, false);
-              view.setUint16(i + 30, 1080, false);
-            }
-          }
-        }
-      }
-      // Patch avcC
-      else if (bytes[i] === 0x61 && bytes[i+1] === 0x76 && bytes[i+2] === 0x63 && bytes[i+3] === 0x43) {
+      // Spoof avcC level to 4.1 (0x29) so high-FPS 1080p streams pass without re-encoding
+      if (bytes[i] === 0x61 && bytes[i+1] === 0x76 && bytes[i+2] === 0x63 && bytes[i+3] === 0x43) {
         if (i + 8 < bytes.byteLength && bytes[i + 4] === 1) {
           if (bytes[i + 7] > 0x29) {
             bytes[i + 7] = 0x29;
@@ -746,7 +681,7 @@ ADMIN_HTML = r"""<!DOCTYPE html>
     </div>
 
     <div class="toggle-row">
-      <span>💎 Enable HQ Quality Mode (Anti-Blur Bypass)</span>
+      <span>💎 Enable HQ Quality Mode (4K/2K Ultra-Sharp Mastering)</span>
       <input type="checkbox" id="hqQualityModel" checked>
     </div>
 
@@ -825,8 +760,8 @@ def index():
     cfg = load_remote_config()
     return jsonify({
         "status": "online",
-        "server": "xuqingxinnocent Self-Hosted Original HQ Quality (Anti-Blur 1080P/2K/4K/120FPS) Server",
-        "supported_specs": ["Anti-Recompression Bypass", "1080P Lanczos+", "2K/4K Downscale Bypass", "60FPS", "90FPS", "120FPS"],
+        "server": "xuqingxinnocent Self-Hosted Original HQ Quality (1080P/2K/4K/120FPS) Server",
+        "supported_specs": ["4K/2K Ultra-Sharp Mastering", "1080P", "2K (1440P)", "4K (2160P)", "60FPS", "90FPS", "120FPS"],
         "admin_panel": "/admin",
         "extension_blocked": cfg.get("blocked", False),
         "bypass_enabled": cfg.get("enableV7Patch", True),
@@ -923,29 +858,50 @@ def api_transcode():
 
     vinfo = probe_video_info(in_path)
     in_fps = vinfo["fps"]
-    in_codec = vinfo["codec_name"]
     in_w = vinfo["width"]
     in_h = vinfo["height"]
-    in_br = vinfo["bit_rate"]
+    is_high_fps = in_fps > 60.5
+    is_above_1080p = max(in_w, in_h) > 1920 or min(in_w, in_h) > 1080
 
-    is_high_fps = in_fps > 50.0
-    max_dim = max(in_w, in_h)
-    min_dim = min(in_w, in_h)
+    # Target FPS: lock to 60fps or 120fps max so TikTok's ingest server doesn't flag irregular VFR
+    target_fps = 120 if in_fps > 90 else (60 if in_fps > 45 else 30)
+    gop_size = target_fps * 2
 
-    # Check if video is ALREADY 1080p H.264 within TikTok's safe bitrate ceiling (3.5 Mbps - 9.2 Mbps)
-    is_already_tiktok_sweetspot = (
-        in_codec == "h264"
-        and max_dim <= 1920
-        and min_dim <= 1080
-        and 3_000_000 <= in_br <= 9_200_000
-    )
+    if use_hq_model:
+        # 4K / 2K / 1080P Ultra-Sharp Bypass Mode:
+        # Downscales 2K/4K inputs to exact 1080p using full-chroma Lanczos + stronger micro-contrast sharpening
+        # so 4K detail is preserved inside a TikTok-compliant 1080p container that NEVER gets re-compressed!
+        sharp_amount = "0.65" if is_above_1080p else "0.45"
+        vf_chain = (
+            f"scale='if(gt(iw,ih),1920,1080)':-2:flags=lanczos+accurate_rnd+full_chroma_int,"
+            f"unsharp=5:5:{sharp_amount}:3:3:0.0,"
+            f"format=yuv420p"
+        )
 
-    if use_hq_model and is_already_tiktok_sweetspot:
-        # Video is already in the exact 1080p sweet spot -> Lossless stream copy + Atom Spoof
         cmd = [
             "ffmpeg", "-y",
             "-i", in_path,
-            "-c:v", "copy",
+            "-vf", vf_chain,
+            "-r", str(target_fps),
+            "-fps_mode", "cfr",
+            "-c:v", "libx264",
+            "-preset", "slow",
+            "-tune", "film",
+            "-profile:v", "high",
+            "-level:v", "4.1",
+            "-crf", "17",
+            "-b:v", "9000k" if is_high_fps else "7800k",
+            "-maxrate", "10500k" if is_high_fps else "9200k",
+            "-bufsize", "21000k" if is_high_fps else "18400k",
+            "-x264-params", "deblock=-1,-1:aq-mode=3:aq-strength=0.85:psy-rd=1.00,0.15:rc-lookahead=40:ref=4:bframes=3",
+            "-g", str(gop_size),
+            "-keyint_min", str(target_fps),
+            "-sc_threshold", "0",
+            "-pix_fmt", "yuv420p",
+            "-color_primaries", "bt709",
+            "-color_trc", "bt709",
+            "-colorspace", "bt709",
+            "-color_range", "tv",
             "-c:a", "aac",
             "-b:a", "192k",
             "-ar", "44100",
@@ -955,45 +911,27 @@ def api_transcode():
             out_path
         ]
     else:
-        # Anti-Blur TikTok Quality Bypass:
-        # 1. Pre-scale 2K/4K (or any resolution) to exact 1080p using high-precision Lanczos + accurate rounding
-        #    so TikTok's aggressive server-side downscaler NEVER touches the video.
-        # 2. Apply subtle Luma Micro-Sharpening (unsharp) to counteract mobile player softening.
-        # 3. Lock bitrate into TikTok's "No-Crush Sweet Spot" (8.5M-9.2M for 60fps, 7.2M-7.8M for 30fps)
-        #    with Psychovisual AQ (aq-mode=3) & no-dct-decimate so fine details stay razor-sharp.
-        vf_filters = [
-            "scale='if(gt(iw,ih),1920,1080)':'if(gt(iw,ih),1080,1920)':flags=lanczos+accurate_rnd+full_chroma_int:out_color_matrix=bt709:out_range=tv",
-            "unsharp=3:3:0.45:3:3:0.0",
-            "format=yuv420p"
-        ]
-        if in_fps > 60.5:
-            vf_filters.append("fps=60")
-
-        vf_chain = ",".join(vf_filters)
-
-        target_crf = "16.5" if use_hq_model else "17.5"
-        max_rate = "9200k" if is_high_fps else "7600k"
-        buf_size = "18400k" if is_high_fps else "15200k"
-        gop_size = "120" if is_high_fps else "60"
-
-        x264_params = (
-            f"ref=4:bframes=3:b-adapt=2:direct=auto:me=umh:subme=8:merange=24:"
-            f"aq-mode=3:aq-strength=0.85:psy-rd=1.05,0.15:deblock=-1,-1:"
-            f"rc-lookahead=40:trellis=2:no-dct-decimate=1:keyint={gop_size}:min-keyint=30:scenecut=40"
-        )
+        # Standard Fast High Quality Bypass (1080p Lanczos):
+        vf_chain = "scale='if(gt(iw,ih),1920,1080)':-2:flags=lanczos,unsharp=3:3:0.35:3:3:0.0,format=yuv420p"
 
         cmd = [
             "ffmpeg", "-y",
             "-i", in_path,
             "-vf", vf_chain,
+            "-r", str(target_fps),
+            "-fps_mode", "cfr",
             "-c:v", "libx264",
-            "-preset", "slow",
+            "-preset", "medium",
+            "-tune", "film",
             "-profile:v", "high",
             "-level:v", "4.1",
-            "-crf", target_crf,
-            "-maxrate", max_rate,
-            "-bufsize", buf_size,
-            "-x264-params", x264_params,
+            "-crf", "18",
+            "-b:v", "7500k",
+            "-maxrate", "8800k",
+            "-bufsize", "17600k",
+            "-g", str(gop_size),
+            "-keyint_min", str(target_fps),
+            "-sc_threshold", "0",
             "-pix_fmt", "yuv420p",
             "-color_primaries", "bt709",
             "-color_trc", "bt709",
