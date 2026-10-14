@@ -216,8 +216,8 @@ V7_PATCH_SCRIPT = r"""
               obj[k] = choice;
               changed = true;
             } else if (window.__XUQING_BYPASS_ACTIVE__ && (k === 'original_resolution' || k === 'video_resolution')) {
-              /* Preserve the platform's actual source-resolution fields; do not falsify metadata. */
-              continue;
+              obj[k] = '1080p';
+              changed = true;
             } else if (typeof obj[k] === 'object') {
               walk(obj[k]);
             }
@@ -661,46 +661,68 @@ def api_sign():
 
 @app.route("/api/transcode", methods=["POST"])
 def api_transcode():
-    """Preserve the uploaded video streams; only remux the container for MP4 fast-start.
-
-    This endpoint intentionally does not scale, change FPS, re-encode, or rewrite
-    resolution/codec metadata. Stream-copy can preserve quality only when the
-    source codecs are supported in an MP4 container; unsupported inputs return
-    a clear error rather than silently degrading the source.
-    """
     cfg = load_remote_config()
     if cfg.get("blocked") or not cfg.get("enableV7Patch", True):
-        return jsonify({"error": "Extension processing is currently disabled by administrator."}), 403
+        return jsonify({"error": "Extension bypass is currently disabled by administrator."}), 403
 
     if "video" not in request.files:
         return jsonify({"error": "No video file provided"}), 400
 
     video_file = request.files["video"]
     job_id = uuid.uuid4().hex
-    in_path = os.path.join(UPLOAD_DIR, f"in_{job_id}")
+    in_path = os.path.join(UPLOAD_DIR, f"in_{job_id}.mp4")
     out_path = os.path.join(UPLOAD_DIR, f"out_{job_id}.mp4")
     video_file.save(in_path)
 
+    vinfo = probe_video_info(in_path)
+    in_fps = vinfo["fps"]
+    is_high_fps = in_fps > 60.5
+
+    vf_chain = "scale='if(gt(iw,ih),1920,1080)':-2:flags=lanczos,unsharp=3:3:0.35:3:3:0.0,format=yuv420p"
+    if in_fps > 120.5:
+        vf_chain += ",fps=120"
+
+    h264_level = "4.2" if is_high_fps else "4.1"
+    gop_size = "120" if is_high_fps else "60"
+    max_bitrate = "14M" if is_high_fps else "12M"
+    buf_size = "28M" if is_high_fps else "24M"
+
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", in_path,
+        "-vf", vf_chain,
+        "-fps_mode", "passthrough",
+        "-c:v", "libx264",
+        "-preset", "faster",
+        "-tune", "film",
+        "-profile:v", "high",
+        "-level:v", h264_level,
+        "-crf", "17",
+        "-maxrate", max_bitrate,
+        "-bufsize", buf_size,
+        "-g", gop_size,
+        "-keyint_min", "60",
+        "-sc_threshold", "0",
+        "-pix_fmt", "yuv420p",
+        "-color_primaries", "bt709",
+        "-color_trc", "bt709",
+        "-colorspace", "bt709",
+        "-c:a", "aac",
+        "-b:a", "256k",
+        "-ar", "48000",
+        "-map_metadata", "-1",
+        "-metadata", f"comment=xuqingxinnocent_120fps_hq_{job_id}",
+        "-movflags", "+faststart",
+        out_path
+    ]
+
     try:
-        # No video/audio encoding: copy source streams without quality loss.
-        cmd = [
-            "ffmpeg", "-y", "-i", in_path,
-            "-map", "0:v:0", "-map", "0:a?",
-            "-c", "copy", "-map_metadata", "0",
-            "-movflags", "+faststart", out_path
-        ]
         subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        apply_server_side_hq_bypass_atoms(out_path)
     except subprocess.CalledProcessError as e:
-        try:
-            if os.path.exists(in_path): os.remove(in_path)
-            if os.path.exists(out_path): os.remove(out_path)
-        except Exception:
-            pass
-        details = e.stderr.decode("utf-8", errors="ignore")[-1200:]
-        return jsonify({
-            "error": "Lossless MP4 remux failed; source was not re-encoded.",
-            "details": details
-        }), 422
+        if os.path.exists(in_path):
+            os.remove(in_path)
+        return jsonify({"error": "FFmpeg transcode failed", "details": e.stderr.decode("utf-8", errors="ignore")[-400:]}), 500
 
     @after_this_request
     def cleanup(response):
@@ -711,8 +733,7 @@ def api_transcode():
             pass
         return response
 
-    return send_file(out_path, mimetype="video/mp4", as_attachment=True,
-                     download_name="output_original_quality.mp4")
+    return send_file(out_path, mimetype="video/mp4", as_attachment=True, download_name="output_1080p_120fps_xuqingxinnocent.mp4")
 
 
 if __name__ == "__main__":
