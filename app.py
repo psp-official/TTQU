@@ -20,6 +20,7 @@ DEFAULT_REMOTE_CONFIG = {
     "blocked": os.environ.get("EXTENSION_BLOCKED", "false").lower() == "true",
     "update_required": os.environ.get("UPDATE_REQUIRED", "false").lower() == "true",
     "enableV7Patch": os.environ.get("ENABLE_V7_PATCH", "true").lower() != "false",
+    "hqQualityModel": os.environ.get("HQ_QUALITY_MODEL", "true").lower() != "false",
     "min_version": os.environ.get("MIN_VERSION", "6.1.0"),
     "blacklisted_versions": [],
     "info_message": os.environ.get("INFO_MESSAGE", "UPDATE REQUIRED"),
@@ -147,10 +148,14 @@ V7_PATCH_SCRIPT = r"""
   'use strict';
 
   window.__XUQING_BYPASS_ACTIVE__ = true;
+  window.__XUQING_HQ_MODEL_ACTIVE__ = true;
 
   window.addEventListener('message', function(e) {
-    if (e.data && e.data.type === 'FPS_SET_ACTIVE') {
+    if (!e.data || typeof e.data !== 'object') return;
+    if (e.data.type === 'FPS_SET_ACTIVE') {
       window.__XUQING_BYPASS_ACTIVE__ = !!e.data.value;
+    } else if (e.data.type === 'HQ_MODEL_SET_ACTIVE') {
+      window.__XUQING_HQ_MODEL_ACTIVE__ = !!e.data.value;
     }
   });
 
@@ -176,7 +181,37 @@ V7_PATCH_SCRIPT = r"""
     }
   } catch (_) {}
 
-  // 2. Privacy Guard + 1080P/2K/4K/120FPS Metadata Guard
+  // 2. Resolve @xuqingxinnocent's TikTok user_id & sec_uid so we can make @xuqingxinnocent a REAL clickable Mention!
+  window.__XUQING_MENTION_USER__ = {
+    unique_id: 'xuqingxinnocent',
+    user_id: '',
+    sec_uid: ''
+  };
+
+  async function resolveXuqingMentionProfile() {
+    if (window.__XUQING_MENTION_USER__.user_id && window.__XUQING_MENTION_USER__.sec_uid) {
+      return window.__XUQING_MENTION_USER__;
+    }
+    try {
+      // Method A: Fetch TikTok's web profile page or API for @xuqingxinnocent
+      const res = await fetch('https://www.tiktok.com/@xuqingxinnocent', { credentials: 'include' });
+      if (res.ok) {
+        const html = await res.text();
+        const mId = html.match(/"user":\{[^}]*"id":"(\d+)"[^}]*"uniqueId":"xuqingxinnocent"/i) ||
+                    html.match(/"uniqueId":"xuqingxinnocent"[^}]*"id":"(\d+)"/i) ||
+                    html.match(/"authorId":"(\d+)"/i);
+        const mSec = html.match(/"secUid":"(MS4wLjABAAAA[A-Za-z0-9_-]+)"/);
+        if (mId && mId[1]) window.__XUQING_MENTION_USER__.user_id = mId[1];
+        if (mSec && mSec[1]) window.__XUQING_MENTION_USER__.sec_uid = mSec[1];
+      }
+    } catch (_) {}
+    return window.__XUQING_MENTION_USER__;
+  }
+
+  // Trigger profile resolution in background
+  setTimeout(resolveXuqingMentionProfile, 500);
+
+  // 3. Privacy Guard + 1080P/2K/4K/120FPS Metadata Guard + Clickable @xuqingxinnocent Mention Injector
   if (!window.__TTQU_PRIVACY_GUARD__) {
     window.__TTQU_PRIVACY_GUARD__ = true;
     window.__USER_PRIVACY_CHOICE__ = null;
@@ -202,6 +237,64 @@ V7_PATCH_SCRIPT = r"""
       } catch (_) {}
     }, true);
 
+    function injectClickableMentionIntoPostData(obj) {
+      if (!obj || typeof obj !== 'object') return false;
+      let modified = false;
+
+      // Find caption field ('text' or 'title' or 'desc') and 'text_extra' array in TikTok Studio post payload
+      const captionKey = ('text' in obj && typeof obj.text === 'string') ? 'text'
+                       : ('desc' in obj && typeof obj.desc === 'string') ? 'desc'
+                       : null;
+
+      if (captionKey && Array.isArray(obj.text_extra)) {
+        const caption = obj[captionKey];
+        const mentionTag = '@xuqingxinnocent';
+        const mentionIdx = caption.indexOf(mentionTag);
+        const uInfo = window.__XUQING_MENTION_USER__ || {};
+
+        if (mentionIdx !== -1 && (uInfo.user_id || uInfo.sec_uid)) {
+          const alreadyHasMention = obj.text_extra.some(
+            item => item && (item.user_id === uInfo.user_id || item.sec_uid === uInfo.sec_uid || item.start === mentionIdx)
+          );
+          if (!alreadyHasMention) {
+            obj.text_extra.push({
+              start: mentionIdx,
+              end: mentionIdx + mentionTag.length,
+              user_id: uInfo.user_id || '',
+              sec_uid: uInfo.sec_uid || '',
+              type: 0,
+              aweme_type: 0,
+              hashtag_name: '',
+              is_commerce: false
+            });
+            modified = true;
+          }
+        }
+
+        // Also ensure #xuqingxinnocent is registered as a clickable hashtag in text_extra
+        const hashTag = '#xuqingxinnocent';
+        const hashIdx = caption.indexOf(hashTag);
+        if (hashIdx !== -1) {
+          const alreadyHasHash = obj.text_extra.some(
+            item => item && (item.hashtag_name === 'xuqingxinnocent' || item.start === hashIdx)
+          );
+          if (!alreadyHasHash) {
+            obj.text_extra.push({
+              start: hashIdx,
+              end: hashIdx + hashTag.length,
+              user_id: '',
+              type: 1,
+              hashtag_name: 'xuqingxinnocent',
+              is_commerce: false
+            });
+            modified = true;
+          }
+        }
+      }
+
+      return modified;
+    }
+
     function patchUploadPayload(bodyStr) {
       try {
         if (typeof bodyStr !== 'string' || !bodyStr.trim().startsWith('{')) return bodyStr;
@@ -211,6 +304,9 @@ V7_PATCH_SCRIPT = r"""
 
         function walk(obj) {
           if (!obj || typeof obj !== 'object') return;
+          if (injectClickableMentionIntoPostData(obj)) {
+            changed = true;
+          }
           for (const k of Object.keys(obj)) {
             if (choice !== null && (k === 'visibility_type' || k === 'privacy_level' || k === 'private_status')) {
               obj[k] = choice;
@@ -337,16 +433,21 @@ INJECT_SCRIPT = r"""
 })();
 """
 
+# Watermark script:
+# 1. Inserts "#xuqingxinnocent • Quality Uploaded ✓ "
+# 2. Types "@xuqingxinnocent" and automatically selects the @xuqingxinnocent user item from TikTok Studio's mention popup (or links it via text_extra) so @xuqingxinnocent is a REAL clickable Mention!
 WATERMARK_SCRIPT = r"""
 (function() {
   'use strict';
   if (window.__XUQING_WM_INSTALLED__) return;
   window.__XUQING_WM_INSTALLED__ = true;
 
-  const WM_TEXT = '#xuqingxinnocent \u2022 Quality Uploaded \u2713 @xuqingxinnocent ';
+  const WM_PREFIX_TEXT = ' #xuqingxinnocent \u2022 Quality Uploaded \u2713 ';
+  const WM_MENTION_HANDLE = 'xuqingxinnocent';
   const WM_MARKER = 'Quality Uploaded';
   let wmEnabled = true;
   let lastInsertedEditor = null;
+  let isInserting = false;
 
   function findCaptionEditor() {
     const selectors = [
@@ -364,8 +465,45 @@ WATERMARK_SCRIPT = r"""
     return null;
   }
 
-  function insertWatermarkIntoEditor() {
-    if (!wmEnabled) return false;
+  function pasteTextIntoEditor(editor, text) {
+    editor.focus();
+    const dt = new DataTransfer();
+    dt.setData('text/plain', text);
+    const pasteEvent = new ClipboardEvent('paste', {
+      clipboardData: dt,
+      bubbles: true,
+      cancelable: true
+    });
+    editor.dispatchEvent(pasteEvent);
+  }
+
+  function tryClickMentionPopupItem() {
+    return new Promise((resolve) => {
+      let checks = 0;
+      const timer = setInterval(() => {
+        checks++;
+        // Look for TikTok Studio's @mention suggestion popup item matching 'xuqingxinnocent'
+        const candidates = document.querySelectorAll(
+          '[data-e2e*="mention"] li, [data-e2e*="at-user"] li, [class*="mention"] li, [class*="Mention"] li, [class*="at-item"], [class*="user-item"], [role="listbox"] [role="option"], [class*="suggestion"] div'
+        );
+        for (const item of candidates) {
+          const t = (item.innerText || item.textContent || '').toLowerCase();
+          if (t.includes('xuqingxinnocent') && item.offsetParent !== null) {
+            item.click();
+            clearInterval(timer);
+            return resolve(true);
+          }
+        }
+        if (checks >= 16) {
+          clearInterval(timer);
+          resolve(false);
+        }
+      }, 150);
+    });
+  }
+
+  async function insertWatermarkIntoEditor() {
+    if (!wmEnabled || isInserting) return false;
     const editor = findCaptionEditor();
     if (!editor) return false;
 
@@ -374,9 +512,11 @@ WATERMARK_SCRIPT = r"""
       return true;
     }
 
+    isInserting = true;
     try {
       editor.focus();
 
+      // Move cursor to the end of existing caption (or replace auto-filled filename if it ends with -xuqingxinnocent)
       if (currentText.trim().endsWith('-xuqingxinnocent')) {
         document.execCommand('selectAll', false, null);
       } else {
@@ -388,35 +528,35 @@ WATERMARK_SCRIPT = r"""
         sel.addRange(range);
       }
 
-      const prefix = (currentText.trim().length > 0 && !currentText.trim().endsWith('-xuqingxinnocent')) ? ' ' : '';
-      const textToInsert = prefix + WM_TEXT;
-
-      const dt = new DataTransfer();
-      dt.setData('text/plain', textToInsert);
-      const pasteEvent = new ClipboardEvent('paste', {
-        clipboardData: dt,
-        bubbles: true,
-        cancelable: true
-      });
-      editor.dispatchEvent(pasteEvent);
+      // Step 1: Insert "#xuqingxinnocent • Quality Uploaded ✓ @" to trigger TikTok's @mention autocomplete
+      pasteTextIntoEditor(editor, WM_PREFIX_TEXT + '@' + WM_MENTION_HANDLE);
 
       setTimeout(() => {
         const afterText = (editor.innerText || editor.textContent || '');
         if (!afterText.includes(WM_MARKER)) {
           editor.focus();
-          document.execCommand('insertText', false, textToInsert);
+          document.execCommand('insertText', false, WM_PREFIX_TEXT + '@' + WM_MENTION_HANDLE);
           editor.dispatchEvent(new InputEvent('input', {
             bubbles: true,
             cancelable: true,
             inputType: 'insertText',
-            data: textToInsert
+            data: '@' + WM_MENTION_HANDLE
           }));
         }
-      }, 80);
+      }, 70);
+
+      // Step 2: Wait briefly for TikTok Studio's @mention suggestion list and click @xuqingxinnocent if visible
+      const clickedPopup = await tryClickMentionPopupItem();
+      if (!clickedPopup) {
+        // Add trailing space so caption is clean; our fetch/XHR text_extra injector also links @xuqingxinnocent at post time!
+        pasteTextIntoEditor(editor, ' ');
+      }
 
       lastInsertedEditor = editor;
+      isInserting = false;
       return true;
     } catch (_) {
+      isInserting = false;
       return false;
     }
   }
@@ -424,17 +564,17 @@ WATERMARK_SCRIPT = r"""
   function triggerWatermarkWithRetry() {
     if (!wmEnabled) return;
     let attempts = 0;
-    const timer = setInterval(() => {
+    const timer = setInterval(async () => {
       attempts++;
       if (!wmEnabled || attempts > 30) {
         clearInterval(timer);
         return;
       }
-      const ok = insertWatermarkIntoEditor();
+      const ok = await insertWatermarkIntoEditor();
       if (ok) {
         clearInterval(timer);
       }
-    }, 500);
+    }, 600);
   }
 
   window.addEventListener('message', function(e) {
@@ -452,7 +592,7 @@ WATERMARK_SCRIPT = r"""
   });
 
   const observer = new MutationObserver(() => {
-    if (!wmEnabled) return;
+    if (!wmEnabled || isInserting) return;
     const editor = findCaptionEditor();
     if (editor && editor !== lastInsertedEditor) {
       const txt = (editor.innerText || editor.textContent || '');
@@ -506,7 +646,7 @@ ADMIN_HTML = r"""<!DOCTYPE html>
 <body>
   <div class="panel">
     <h2>XUQINGXINNOCENT ADMIN</h2>
-    <p class="sub">Remote Extension Lock, Force Update & Bypass Switch</p>
+    <p class="sub">Remote Extension Lock, Force Update & HQ Quality Model Switch</p>
 
     <div class="row">
       <label>Admin Key (Default: xuqing123)</label>
@@ -521,6 +661,11 @@ ADMIN_HTML = r"""<!DOCTYPE html>
     <div class="toggle-row">
       <span>⚡ Enable High Quality Bypass (V7Patch)</span>
       <input type="checkbox" id="enableV7Patch" checked>
+    </div>
+
+    <div class="toggle-row">
+      <span>💎 Enable HQ Quality Model (Ultra 2K/4K Engine)</span>
+      <input type="checkbox" id="hqQualityModel" checked>
     </div>
 
     <div class="row">
@@ -558,6 +703,7 @@ ADMIN_HTML = r"""<!DOCTYPE html>
       const data = await res.json();
       document.getElementById('blocked').checked = !!data.blocked;
       document.getElementById('enableV7Patch').checked = data.enableV7Patch !== false;
+      document.getElementById('hqQualityModel').checked = data.hqQualityModel !== false;
       document.getElementById('min_version').value = data.min_version || '6.1.0';
       document.getElementById('info_message').value = data.info_message || 'UPDATE REQUIRED';
       document.getElementById('update_message').value = data.update_message || '';
@@ -570,6 +716,7 @@ ADMIN_HTML = r"""<!DOCTYPE html>
         blocked: document.getElementById('blocked').checked,
         update_required: document.getElementById('blocked').checked,
         enableV7Patch: document.getElementById('enableV7Patch').checked,
+        hqQualityModel: document.getElementById('hqQualityModel').checked,
         min_version: document.getElementById('min_version').value.trim(),
         info_message: document.getElementById('info_message').value.trim(),
         update_message: document.getElementById('update_message').value.trim(),
@@ -596,11 +743,12 @@ def index():
     cfg = load_remote_config()
     return jsonify({
         "status": "online",
-        "server": "xuqingxinnocent Self-Hosted 1080P/2K/4K/120FPS HQ Bypass Server",
-        "supported_specs": ["1080P", "2K (1440P)", "4K (2160P)", "60FPS", "90FPS", "120FPS"],
+        "server": "xuqingxinnocent Self-Hosted 1080P/2K/4K/120FPS + HQ Quality Model Server",
+        "supported_specs": ["1080P", "2K (1440P)", "4K (2160P)", "60FPS", "90FPS", "120FPS", "HQ Quality Model"],
         "admin_panel": "/admin",
         "extension_blocked": cfg.get("blocked", False),
         "bypass_enabled": cfg.get("enableV7Patch", True),
+        "hq_quality_model": cfg.get("hqQualityModel", True),
         "min_version": cfg.get("min_version", "6.1.0"),
         "endpoints": ["/api/checkup", "/api/control", "/api/patch", "/api/inject", "/api/sign", "/api/transcode", "/admin"],
         "timestamp": datetime.utcnow().isoformat() + "Z"
@@ -619,7 +767,7 @@ def api_admin_config():
         return jsonify({"ok": False, "error": "Invalid Admin Key"}), 403
 
     updates = {}
-    for k in ["blocked", "update_required", "enableV7Patch", "min_version", "info_message", "update_message", "update_url", "tele", "update_url_2", "wa"]:
+    for k in ["blocked", "update_required", "enableV7Patch", "hqQualityModel", "min_version", "info_message", "update_message", "update_url", "tele", "update_url_2", "wa"]:
         if k in body:
             updates[k] = body[k]
 
@@ -638,6 +786,7 @@ def api_control():
     cfg = load_remote_config()
     return jsonify({
         "enableV7Patch": cfg.get("enableV7Patch", True),
+        "hqQualityModel": cfg.get("hqQualityModel", True),
         "blocked": cfg.get("blocked", False),
         "maxFps": 120,
         "resolutions": ["1080p", "2k", "4k"]
@@ -668,6 +817,10 @@ def api_transcode():
     if "video" not in request.files:
         return jsonify({"error": "No video file provided"}), 400
 
+    # Check if HQ Quality Model is requested by client and enabled on server
+    client_hq = request.args.get("hq_model", request.form.get("hq_model", "1")) == "1"
+    use_hq_model = client_hq and cfg.get("hqQualityModel", True)
+
     video_file = request.files["video"]
     job_id = uuid.uuid4().hex
     in_path = os.path.join(UPLOAD_DIR, f"in_{job_id}.mp4")
@@ -678,14 +831,30 @@ def api_transcode():
     in_fps = vinfo["fps"]
     is_high_fps = in_fps > 60.5
 
-    vf_chain = "scale='if(gt(iw,ih),1920,1080)':-2:flags=lanczos,unsharp=3:3:0.35:3:3:0.0,format=yuv420p"
+    if use_hq_model:
+        # HQ Quality Model:
+        # Full chroma interpolation + accurate rounding Lanczos + Luma/Chroma Unsharp + Micro-Contrast/Saturation boost
+        vf_chain = (
+            "scale='if(gt(iw,ih),1920,1080)':-2:flags=lanczos+accurate_rnd+full_chroma_int,"
+            "unsharp=5:5:0.55:3:3:0.2,"
+            "eq=contrast=1.03:saturation=1.05,"
+            "format=yuv420p"
+        )
+        crf_val = "16"
+        max_bitrate = "18M" if is_high_fps else "15M"
+        buf_size = "36M" if is_high_fps else "30M"
+    else:
+        # Standard High Quality Bypass:
+        vf_chain = "scale='if(gt(iw,ih),1920,1080)':-2:flags=lanczos,unsharp=3:3:0.35:3:3:0.0,format=yuv420p"
+        crf_val = "17"
+        max_bitrate = "14M" if is_high_fps else "12M"
+        buf_size = "28M" if is_high_fps else "24M"
+
     if in_fps > 120.5:
         vf_chain += ",fps=120"
 
     h264_level = "4.2" if is_high_fps else "4.1"
     gop_size = "120" if is_high_fps else "60"
-    max_bitrate = "14M" if is_high_fps else "12M"
-    buf_size = "28M" if is_high_fps else "24M"
 
     cmd = [
         "ffmpeg", "-y",
@@ -697,7 +866,7 @@ def api_transcode():
         "-tune", "film",
         "-profile:v", "high",
         "-level:v", h264_level,
-        "-crf", "17",
+        "-crf", crf_val,
         "-maxrate", max_bitrate,
         "-bufsize", buf_size,
         "-g", gop_size,
@@ -711,7 +880,7 @@ def api_transcode():
         "-b:a", "256k",
         "-ar", "48000",
         "-map_metadata", "-1",
-        "-metadata", f"comment=xuqingxinnocent_120fps_hq_{job_id}",
+        "-metadata", f"comment=xuqingxinnocent_hqmodel_{job_id}",
         "-movflags", "+faststart",
         out_path
     ]
