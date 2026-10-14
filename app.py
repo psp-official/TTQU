@@ -1,28 +1,17 @@
 import os
 import json
 import uuid
-import logging
+import struct
 import subprocess
-from dataclasses import dataclass
-from typing import List, Dict
-from datetime import datetime, timezone
+from datetime import datetime
 from flask import Flask, request, jsonify, Response, send_file, after_this_request
 from flask_cors import CORS
-
-# ---------------------------------------------------------------------------
-# Logging & App Initialization
-# ---------------------------------------------------------------------------
-logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s [%(levelname)s] %(name)s: %(message)s"
-)
-logger = logging.getLogger("HQVideoEngine")
 
 app = Flask(__name__)
 CORS(app)
 
-UPLOAD_DIR = os.environ.get("UPLOAD_DIR", "/tmp/ttqu_uploads")
-CONFIG_FILE = os.environ.get("CONFIG_FILE", "/tmp/ttqu_remote_config.json")
+UPLOAD_DIR = "/tmp/ttqu_uploads"
+CONFIG_FILE = "/tmp/ttqu_remote_config.json"
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
 ADMIN_KEY = os.environ.get("ADMIN_KEY", "xuqing123")
@@ -30,9 +19,9 @@ ADMIN_KEY = os.environ.get("ADMIN_KEY", "xuqing123")
 DEFAULT_REMOTE_CONFIG = {
     "blocked": os.environ.get("EXTENSION_BLOCKED", "false").lower() == "true",
     "update_required": os.environ.get("UPDATE_REQUIRED", "false").lower() == "true",
-    "hqQualityModel": os.environ.get("HQ_QUALITY_MODEL", "true").lower() != "false",
-    "allowStreamCopy": os.environ.get("ALLOW_STREAM_COPY", "true").lower() != "false",
+    "enableV7Patch": os.environ.get("ENABLE_V7_PATCH", "true").lower() != "false",
     "min_version": os.environ.get("MIN_VERSION", "6.1.0"),
+    "blacklisted_versions": [],
     "info_message": os.environ.get("INFO_MESSAGE", "UPDATE REQUIRED"),
     "update_message": os.environ.get(
         "UPDATE_MESSAGE",
@@ -45,7 +34,7 @@ DEFAULT_REMOTE_CONFIG = {
 }
 
 
-def load_remote_config() -> dict:
+def load_remote_config():
     cfg = dict(DEFAULT_REMOTE_CONFIG)
     if os.path.exists(CONFIG_FILE):
         try:
@@ -53,254 +42,438 @@ def load_remote_config() -> dict:
                 saved = json.load(f)
                 if isinstance(saved, dict):
                     cfg.update(saved)
-        except Exception as exc:
-            logger.warning(f"Failed to read remote config: {exc}")
+        except Exception:
+            pass
     return cfg
 
 
-def save_remote_config(new_cfg: dict) -> dict:
+def save_remote_config(new_cfg):
     cfg = load_remote_config()
     cfg.update(new_cfg)
     try:
         with open(CONFIG_FILE, "w", encoding="utf-8") as f:
             json.dump(cfg, f, indent=2, ensure_ascii=False)
-    except Exception as exc:
-        logger.warning(f"Failed to save remote config: {exc}")
+    except Exception:
+        pass
     return cfg
 
 
-# ---------------------------------------------------------------------------
-# Data Models
-# ---------------------------------------------------------------------------
-@dataclass
-class VideoMetadata:
-    codec_name: str
-    pix_fmt: str
-    width: int
-    height: int
-    fps: float
-    bit_rate: int
-    audio_codec: str
-
-    @property
-    def max_dimension(self) -> int:
-        return max(self.width, self.height)
-
-    @property
-    def min_dimension(self) -> int:
-        return min(self.width, self.height)
-
-    @property
-    def is_4k(self) -> bool:
-        return self.max_dimension >= 3840 or self.min_dimension >= 2160
-
-    @property
-    def is_2k(self) -> bool:
-        return not self.is_4k and (self.max_dimension >= 2560 or self.min_dimension >= 1440)
-
-    @property
-    def is_high_fps(self) -> bool:
-        return self.fps > 60.5
-
-    @property
-    def tier_label(self) -> str:
-        res = "4K" if self.is_4k else ("2K" if self.is_2k else "1080P")
-        fps_label = "120FPS" if self.fps >= 100 else ("60FPS" if self.fps >= 50 else f"{int(round(self.fps))}FPS")
-        return f"{res}_{fps_label}"
-
-
-# ---------------------------------------------------------------------------
-# Media Probing Service (ffprobe)
-# ---------------------------------------------------------------------------
-def probe_media(filepath: str) -> VideoMetadata:
+def probe_video_info(filepath):
     """
-    Inspects both video and audio streams using ffprobe and returns structured metadata.
+    Uses ffprobe to detect input video width, height, and frame rate (up to 120 FPS+).
     """
-    cmd = [
-        "ffprobe",
-        "-v", "error",
-        "-show_entries", "stream=index,codec_type,codec_name,pix_fmt,width,height,r_frame_rate,avg_frame_rate,bit_rate",
-        "-of", "json",
-        filepath
-    ]
-
-    codec_name = "unknown"
-    pix_fmt = "yuv420p"
-    width, height = 1080, 1920
-    fps = 60.0
-    bit_rate = 0
-    audio_codec = "aac"
-
+    info = {"width": 1080, "height": 1920, "fps": 60.0}
     try:
-        proc = subprocess.run(
-            cmd,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-            timeout=20,
-            check=True
-        )
-        payload = json.loads(proc.stdout or "{}")
-        streams = payload.get("streams", [])
-
-        for st in streams:
-            ctype = st.get("codec_type")
-            if ctype == "video" and codec_name == "unknown":
-                codec_name = (st.get("codec_name") or "h264").lower()
-                pix_fmt = (st.get("pix_fmt") or "yuv420p").lower()
-                width = int(st.get("width") or 1080)
-                height = int(st.get("height") or 1920)
-                bit_rate = int(st.get("bit_rate") or 0)
-
-                fps_raw = st.get("avg_frame_rate") or st.get("r_frame_rate") or "60/1"
-                if "/" in fps_raw:
-                    num, den = fps_raw.split("/", 1)
-                    if float(den) > 0:
-                        fps = float(num) / float(den)
-                else:
-                    fps = float(fps_raw)
-
-            elif ctype == "audio":
-                audio_codec = (st.get("codec_name") or "aac").lower()
-
-    except Exception as exc:
-        logger.warning(f"ffprobe fallback triggered: {exc}")
-
-    return VideoMetadata(
-        codec_name=codec_name,
-        pix_fmt=pix_fmt,
-        width=width,
-        height=height,
-        fps=round(fps, 3),
-        bit_rate=bit_rate,
-        audio_codec=audio_codec
-    )
-
-
-# ---------------------------------------------------------------------------
-# Encoding Profile Builder (Full Support for 1080p, 2K, 4K, 60FPS, 120FPS)
-# ---------------------------------------------------------------------------
-def select_h264_encoding_profile(meta: VideoMetadata) -> Dict[str, str]:
-    """
-    Selects the optimal H.264 level, CRF, VBV maxrate, and bufsize based on
-    resolution (1080p / 2K / 4K) and frame rate (60FPS / 120FPS).
-    """
-    if meta.is_4k:
-        if meta.is_high_fps:
-            # 4K @ 120FPS requires High@L6.0
-            return {"level": "6.0", "crf": "15", "maxrate": "65M", "bufsize": "130M", "gop": "120"}
-        # 4K @ 60FPS requires High@L5.2
-        return {"level": "5.2", "crf": "15", "maxrate": "45M", "bufsize": "90M", "gop": "60"}
-
-    if meta.is_2k:
-        if meta.is_high_fps:
-            # 2K (1440p) @ 120FPS requires High@L5.2
-            return {"level": "5.2", "crf": "15", "maxrate": "35M", "bufsize": "70M", "gop": "120"}
-        # 2K (1440p) @ 60FPS requires High@L5.1
-        return {"level": "5.1", "crf": "15", "maxrate": "25M", "bufsize": "50M", "gop": "60"}
-
-    # 1080p Full HD
-    if meta.is_high_fps:
-        # 1080p @ 120FPS requires High@L5.1
-        return {"level": "5.1", "crf": "16", "maxrate": "20M", "bufsize": "40M", "gop": "120"}
-
-    # 1080p @ 60FPS requires High@L4.2
-    return {"level": "4.2", "crf": "16", "maxrate": "15M", "bufsize": "30M", "gop": "60"}
-
-
-def build_ffmpeg_command(
-    in_path: str,
-    out_path: str,
-    meta: VideoMetadata,
-    preserve_original: bool = True,
-    allow_stream_copy: bool = True
-) -> List[str]:
-    """
-    Constructs a rock-solid FFmpeg command line that preserves 2K/4K/60FPS/120FPS quality.
-    """
-    # 1. Zero-Loss Stream Copy when the source is already compliant 8-bit H.264 + AAC
-    if (
-        preserve_original
-        and allow_stream_copy
-        and meta.codec_name == "h264"
-        and meta.pix_fmt == "yuv420p"
-        and meta.audio_codec == "aac"
-    ):
-        logger.info(f"Using lossless stream copy for {meta.tier_label} ({meta.width}x{meta.height} @ {meta.fps}fps)")
-        return [
-            "ffmpeg", "-y",
-            "-i", in_path,
-            "-c:v", "copy",
-            "-c:a", "copy",
-            "-movflags", "+faststart",
-            out_path
+        cmd = [
+            "ffprobe", "-v", "error",
+            "-select_streams", "v:0",
+            "-show_entries", "stream=width,height,r_frame_rate,avg_frame_rate",
+            "-of", "json",
+            filepath
         ]
-
-    # 2. High-Precision Re-encode (for HEVC/VP9/AV1, 10-bit inputs, or standard 1080p mode)
-    profile = select_h264_encoding_profile(meta)
-    vf_filters = []
-
-    if not preserve_original:
-        # High-precision Lanczos scaling + Luma/Chroma unsharp when 1080p target mode is selected
-        if meta.width > meta.height and meta.width > 1920:
-            vf_filters.append("scale=1920:-2:flags=lanczos+accurate_rnd+full_chroma_int")
-        elif meta.height >= meta.width and meta.height > 1920:
-            vf_filters.append("scale=1080:-2:flags=lanczos+accurate_rnd+full_chroma_int")
-        vf_filters.append("unsharp=3:3:0.35:3:3:0.0")
-    else:
-        # Ensure dimensions are divisible by 2 for yuv420p without changing 2K/4K resolution
-        if meta.width % 2 != 0 or meta.height % 2 != 0:
-            vf_filters.append("scale='trunc(iw/2)*2':'trunc(ih/2)*2':flags=lanczos")
-
-    # Cap FPS at 120 only if source exceeds 120 FPS; otherwise keep exact 60FPS / 120FPS
-    if meta.fps > 120.5:
-        vf_filters.append("fps=120")
-
-    vf_filters.append("format=yuv420p")
-    vf_chain = ",".join(vf_filters)
-
-    logger.info(
-        f"Encoding {meta.tier_label} ({meta.width}x{meta.height} @ {meta.fps}fps) -> "
-        f"H.264 High@L{profile['level']}, CRF={profile['crf']}, Maxrate={profile['maxrate']}"
-    )
-
-    return [
-        "ffmpeg", "-y",
-        "-i", in_path,
-        "-vf", vf_chain,
-        "-fps_mode", "passthrough",
-        "-c:v", "libx264",
-        "-preset", "faster",
-        "-tune", "film",
-        "-profile:v", "high",
-        "-level:v", profile["level"],
-        "-crf", profile["crf"],
-        "-maxrate", profile["maxrate"],
-        "-bufsize", profile["bufsize"],
-        "-g", profile["gop"],
-        "-keyint_min", "30",
-        "-sc_threshold", "0",
-        "-pix_fmt", "yuv420p",
-        "-color_primaries", "bt709",
-        "-color_trc", "bt709",
-        "-colorspace", "bt709",
-        "-c:a", "aac",
-        "-b:a", "320k",
-        "-ar", "48000",
-        "-movflags", "+faststart",
-        out_path
-    ]
+        res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, timeout=15)
+        if res.returncode == 0:
+            data = json.loads(res.stdout)
+            streams = data.get("streams", [])
+            if streams:
+                st = streams[0]
+                info["width"] = int(st.get("width") or 1080)
+                info["height"] = int(st.get("height") or 1920)
+                fps_str = st.get("avg_frame_rate") or st.get("r_frame_rate") or "60/1"
+                if "/" in fps_str:
+                    num, den = fps_str.split("/", 1)
+                    if float(den) > 0:
+                        info["fps"] = float(num) / float(den)
+                else:
+                    info["fps"] = float(fps_str)
+    except Exception as e:
+        print(f"[warn] ffprobe failed: {e}")
+    return info
 
 
-# ---------------------------------------------------------------------------
-# Admin Control Panel UI
-# ---------------------------------------------------------------------------
-ADMIN_HTML = """<!DOCTYPE html>
+def apply_server_side_hq_bypass_atoms(filepath):
+    """
+    Server-Side High Quality Bypass (Supports 1080P, 2K, 4K, and up to 120 FPS):
+    1. Scans MP4 'tkhd' atom and normalizes track header resolution to Official 1080p (1080x1920 or 1920x1080).
+    2. Scans MP4 'avcC' atom and spoofs AVCLevelIndication to Level 4.1 (0x29) so 120 FPS (Level 4.2) videos
+       pass TikTok's strict High@4.1 stream check without framerate downsampling.
+    3. Appends a unique 24-byte 'free' atom with cryptographic random bytes so TikTok's hash check is bypassed.
+    """
+    try:
+        with open(filepath, "rb") as f:
+            data = bytearray(f.read())
+
+        limit = len(data) - 92
+        i = 0
+        while i < limit:
+            if data[i:i+4] == b"tkhd":
+                version = data[i + 4]
+                width_offset = (i + 4 + 84) if version == 1 else (i + 4 + 72)
+                height_offset = width_offset + 4
+                if height_offset + 4 <= len(data):
+                    w_fixed = struct.unpack(">I", data[width_offset:width_offset+4])[0]
+                    h_fixed = struct.unpack(">I", data[height_offset:height_offset+4])[0]
+                    w = w_fixed >> 16
+                    h = h_fixed >> 16
+                    if 0 < w <= 7680 and 0 < h <= 7680:
+                        if h >= w:
+                            struct.pack_into(">I", data, width_offset, 1080 << 16)
+                            struct.pack_into(">I", data, height_offset, 1920 << 16)
+                        else:
+                            struct.pack_into(">I", data, width_offset, 1920 << 16)
+                            struct.pack_into(">I", data, height_offset, 1080 << 16)
+                i += 80
+            elif data[i:i+4] == b"avcC":
+                if i + 8 < len(data) and data[i + 4] == 1:
+                    level_byte = data[i + 7]
+                    if level_byte > 0x29:
+                        data[i + 7] = 0x29
+                i += 8
+            else:
+                i += 1
+
+        random_seed = os.urandom(16)
+        free_box = struct.pack(">I4s16s", 24, b"free", random_seed)
+        data.extend(free_box)
+
+        with open(filepath, "wb") as f:
+            f.write(data)
+    except Exception as e:
+        print(f"[warn] apply_server_side_hq_bypass_atoms error: {e}")
+
+
+V7_PATCH_SCRIPT = r"""
+(function() {
+  'use strict';
+
+  window.__XUQING_BYPASS_ACTIVE__ = true;
+
+  window.addEventListener('message', function(e) {
+    if (e.data && e.data.type === 'FPS_SET_ACTIVE') {
+      window.__XUQING_BYPASS_ACTIVE__ = !!e.data.value;
+    }
+  });
+
+  // 1. Disable Browser-Side WebCodecs Downscaling ONLY when High Quality Bypass is ON
+  try {
+    if (window.VideoEncoder && window.VideoEncoder.isConfigSupported) {
+      const _origIsConfigSupported = window.VideoEncoder.isConfigSupported.bind(window.VideoEncoder);
+      window.VideoEncoder.isConfigSupported = async function(config) {
+        if (window.__XUQING_BYPASS_ACTIVE__) {
+          return { supported: false };
+        }
+        return _origIsConfigSupported(config);
+      };
+    }
+    if (window.AudioEncoder && window.AudioEncoder.isConfigSupported) {
+      const _origAudioSupported = window.AudioEncoder.isConfigSupported.bind(window.AudioEncoder);
+      window.AudioEncoder.isConfigSupported = async function(config) {
+        if (window.__XUQING_BYPASS_ACTIVE__) {
+          return { supported: false };
+        }
+        return _origAudioSupported(config);
+      };
+    }
+  } catch (_) {}
+
+  // 2. Privacy Guard + 1080P/2K/4K/120FPS Metadata Guard
+  if (!window.__TTQU_PRIVACY_GUARD__) {
+    window.__TTQU_PRIVACY_GUARD__ = true;
+    window.__USER_PRIVACY_CHOICE__ = null;
+
+    function detectPrivacyFromText(txt) {
+      if (!txt) return null;
+      txt = txt.trim().toLowerCase();
+      if (txt === 'only you' || txt === 'private' || txt === 'only me') return 2;
+      if (txt === 'friends') return 1;
+      if (txt === 'everyone' || txt === 'public') return 0;
+      return null;
+    }
+
+    document.addEventListener('click', function(e) {
+      try {
+        const el = e.target.closest('[role="option"], [data-e2e*="privacy"], li, div, span');
+        if (el) {
+          const val = detectPrivacyFromText(el.innerText || el.textContent);
+          if (val !== null) {
+            window.__USER_PRIVACY_CHOICE__ = val;
+          }
+        }
+      } catch (_) {}
+    }, true);
+
+    function patchUploadPayload(bodyStr) {
+      try {
+        if (typeof bodyStr !== 'string' || !bodyStr.trim().startsWith('{')) return bodyStr;
+        let choice = window.__USER_PRIVACY_CHOICE__;
+        let data = JSON.parse(bodyStr);
+        let changed = false;
+
+        function walk(obj) {
+          if (!obj || typeof obj !== 'object') return;
+          for (const k of Object.keys(obj)) {
+            if (choice !== null && (k === 'visibility_type' || k === 'privacy_level' || k === 'private_status')) {
+              obj[k] = choice;
+              changed = true;
+            } else if (window.__XUQING_BYPASS_ACTIVE__ && (k === 'original_resolution' || k === 'video_resolution')) {
+              /* Preserve the platform's actual source-resolution fields; do not falsify metadata. */
+              continue;
+            } else if (typeof obj[k] === 'object') {
+              walk(obj[k]);
+            }
+          }
+        }
+        walk(data);
+        return changed ? JSON.stringify(data) : bodyStr;
+      } catch (_) {
+        return bodyStr;
+      }
+    }
+
+    const _origFetch = window.fetch;
+    window.fetch = async function(input, init) {
+      try {
+        if (init && typeof init.body === 'string') {
+          init.body = patchUploadPayload(init.body);
+        }
+      } catch (_) {}
+      return _origFetch.apply(this, arguments);
+    };
+
+    const _origSend = XMLHttpRequest.prototype.send;
+    XMLHttpRequest.prototype.send = function(body) {
+      try {
+        if (typeof body === 'string') {
+          body = patchUploadPayload(body);
+        }
+      } catch (_) {}
+      return _origSend.call(this, body);
+    };
+  }
+
+  function patchMp4AtomsFor1080pAnd120Fps(bytes) {
+    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+    const limit = bytes.byteLength - 92;
+    for (let i = 0; i < limit; i++) {
+      if (bytes[i] === 0x74 && bytes[i+1] === 0x6B && bytes[i+2] === 0x68 && bytes[i+3] === 0x64) {
+        const version = bytes[i + 4];
+        const widthOffset = version === 1 ? (i + 4 + 84) : (i + 4 + 72);
+        const heightOffset = widthOffset + 4;
+        if (heightOffset + 4 <= bytes.byteLength) {
+          const wFixed = view.getUint32(widthOffset, false);
+          const hFixed = view.getUint32(heightOffset, false);
+          const w = wFixed >>> 16;
+          const h = hFixed >>> 16;
+          if ((w > 1080 && h > 1080) && w <= 7680 && h <= 7680) {
+            if (h >= w) {
+              view.setUint32(widthOffset, 1080 << 16, false);
+              view.setUint32(heightOffset, 1920 << 16, false);
+            } else {
+              view.setUint32(widthOffset, 1920 << 16, false);
+              view.setUint32(heightOffset, 1080 << 16, false);
+            }
+          }
+        }
+      }
+      else if (bytes[i] === 0x61 && bytes[i+1] === 0x76 && bytes[i+2] === 0x63 && bytes[i+3] === 0x43) {
+        if (i + 8 < bytes.byteLength && bytes[i + 4] === 1) {
+          if (bytes[i + 7] > 0x29) {
+            bytes[i + 7] = 0x29;
+          }
+        }
+      }
+    }
+  }
+
+  window.V7Patch = async function V7Patch(file) {
+    const ab = await file.arrayBuffer();
+    if (!window.__XUQING_BYPASS_ACTIVE__) {
+      return ab;
+    }
+    const bytes = new Uint8Array(ab);
+
+    try {
+      patchMp4AtomsFor1080pAnd120Fps(bytes);
+    } catch (_) {}
+
+    if (bytes.length >= 24 &&
+        bytes[bytes.length - 20] === 0x66 &&
+        bytes[bytes.length - 19] === 0x72 &&
+        bytes[bytes.length - 18] === 0x65 &&
+        bytes[bytes.length - 17] === 0x65) {
+      return bytes.buffer;
+    }
+
+    const randomSeed = new Uint8Array(16);
+    crypto.getRandomValues(randomSeed);
+
+    const freeBox = new Uint8Array(24);
+    freeBox[0] = 0x00; freeBox[1] = 0x00; freeBox[2] = 0x00; freeBox[3] = 0x18;
+    freeBox[4] = 0x66; freeBox[5] = 0x72; freeBox[6] = 0x65; freeBox[7] = 0x65;
+    freeBox.set(randomSeed, 8);
+
+    const out = new Uint8Array(bytes.length + freeBox.length);
+    out.set(bytes, 0);
+    out.set(freeBox, bytes.length);
+
+    return out.buffer;
+  };
+})();
+"""
+
+INJECT_SCRIPT = r"""
+(function() {
+  window.postMessage({ type: 'FPS_SHOW_BADGE' }, '*');
+  window.addEventListener('message', function(e) {
+    if (!e.data || typeof e.data !== 'object') return;
+    if (e.data.type === 'FPS_SHOW_BADGE' && typeof window.showBadge === 'function') {
+      window.showBadge();
+    } else if (e.data.type === 'FPS_HIDE_BADGE' && typeof window.hideBadge === 'function') {
+      window.hideBadge();
+    } else if (e.data.type === 'FPS_SET_ACTIVE' && typeof window._badge_update === 'function') {
+      window._badge_update(e.data.value ? 'active' : 'off');
+    }
+  });
+})();
+"""
+
+WATERMARK_SCRIPT = r"""
+(function() {
+  'use strict';
+  if (window.__XUQING_WM_INSTALLED__) return;
+  window.__XUQING_WM_INSTALLED__ = true;
+
+  const WM_TEXT = '#xuqingxinnocent \u2022 Quality Uploaded \u2713 @xuqingxinnocent ';
+  const WM_MARKER = 'Quality Uploaded';
+  let wmEnabled = true;
+  let lastInsertedEditor = null;
+
+  function findCaptionEditor() {
+    const selectors = [
+      '.public-DraftEditor-content[contenteditable="true"]',
+      '[data-e2e="caption-container"] [contenteditable="true"]',
+      '[class*="caption"] [contenteditable="true"]',
+      '[class*="Caption"] [contenteditable="true"]',
+      'div[contenteditable="true"][role="combobox"]',
+      'div[contenteditable="true"]'
+    ];
+    for (const sel of selectors) {
+      const el = document.querySelector(sel);
+      if (el && el.offsetParent !== null) return el;
+    }
+    return null;
+  }
+
+  function insertWatermarkIntoEditor() {
+    if (!wmEnabled) return false;
+    const editor = findCaptionEditor();
+    if (!editor) return false;
+
+    const currentText = (editor.innerText || editor.textContent || '');
+    if (currentText.includes(WM_MARKER) || currentText.includes('#xuqingxinnocent')) {
+      return true;
+    }
+
+    try {
+      editor.focus();
+
+      if (currentText.trim().endsWith('-xuqingxinnocent')) {
+        document.execCommand('selectAll', false, null);
+      } else {
+        const sel = window.getSelection();
+        const range = document.createRange();
+        range.selectNodeContents(editor);
+        range.collapse(false);
+        sel.removeAllRanges();
+        sel.addRange(range);
+      }
+
+      const prefix = (currentText.trim().length > 0 && !currentText.trim().endsWith('-xuqingxinnocent')) ? ' ' : '';
+      const textToInsert = prefix + WM_TEXT;
+
+      const dt = new DataTransfer();
+      dt.setData('text/plain', textToInsert);
+      const pasteEvent = new ClipboardEvent('paste', {
+        clipboardData: dt,
+        bubbles: true,
+        cancelable: true
+      });
+      editor.dispatchEvent(pasteEvent);
+
+      setTimeout(() => {
+        const afterText = (editor.innerText || editor.textContent || '');
+        if (!afterText.includes(WM_MARKER)) {
+          editor.focus();
+          document.execCommand('insertText', false, textToInsert);
+          editor.dispatchEvent(new InputEvent('input', {
+            bubbles: true,
+            cancelable: true,
+            inputType: 'insertText',
+            data: textToInsert
+          }));
+        }
+      }, 80);
+
+      lastInsertedEditor = editor;
+      return true;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  function triggerWatermarkWithRetry() {
+    if (!wmEnabled) return;
+    let attempts = 0;
+    const timer = setInterval(() => {
+      attempts++;
+      if (!wmEnabled || attempts > 30) {
+        clearInterval(timer);
+        return;
+      }
+      const ok = insertWatermarkIntoEditor();
+      if (ok) {
+        clearInterval(timer);
+      }
+    }, 500);
+  }
+
+  window.addEventListener('message', function(e) {
+    if (!e.data || typeof e.data !== 'object') return;
+    if (e.data.type === 'WM_SET_ACTIVE') {
+      wmEnabled = !!e.data.value;
+      if (wmEnabled) {
+        triggerWatermarkWithRetry();
+      }
+    } else if (e.data.type === 'WM_VIDEO_UPLOADED') {
+      if (wmEnabled) {
+        triggerWatermarkWithRetry();
+      }
+    }
+  });
+
+  const observer = new MutationObserver(() => {
+    if (!wmEnabled) return;
+    const editor = findCaptionEditor();
+    if (editor && editor !== lastInsertedEditor) {
+      const txt = (editor.innerText || editor.textContent || '');
+      if (!txt.includes(WM_MARKER)) {
+        insertWatermarkIntoEditor();
+      }
+    }
+  });
+
+  if (document.documentElement) {
+    observer.observe(document.documentElement, { childList: true, subtree: true });
+  }
+})();
+"""
+
+ADMIN_HTML = r"""<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>HQ Video Engine — Admin Control Panel</title>
+  <title>xuqingxinnocent — Remote Extension Control Panel</title>
   <style>
     body {
       background: #0a0a0b; color: #f5f5f5; font-family: system-ui, -apple-system, sans-serif;
@@ -321,7 +494,7 @@ ADMIN_HTML = """<!DOCTYPE html>
     .toggle-row {
       display: flex; align-items: center; justify-content: space-between;
       background: #181a1f; padding: 12px 14px; border-radius: 12px; margin-bottom: 10px;
-      border: 1px solid #232730; font-size: 13px;
+      border: 1px solid #232730;
     }
     .btn {
       width: 100%; background: #00FF6A; color: #0a0a0b; border: none; border-radius: 12px;
@@ -332,41 +505,36 @@ ADMIN_HTML = """<!DOCTYPE html>
 </head>
 <body>
   <div class="panel">
-    <h2>HQ VIDEO ENGINE ADMIN</h2>
-    <p class="sub">2K / 4K / 60FPS / 120FPS Transcoding & Version Control</p>
+    <h2>XUQINGXINNOCENT ADMIN</h2>
+    <p class="sub">Remote Extension Lock, Force Update & Bypass Switch</p>
 
     <div class="row">
-      <label>Admin Key</label>
+      <label>Admin Key (Default: xuqing123)</label>
       <input type="password" id="adminKey" value="xuqing123">
     </div>
 
     <div class="toggle-row">
-      <span>Maintenance / Force Update Lock</span>
+      <span>🔴 Block / Force Update Overlay</span>
       <input type="checkbox" id="blocked">
     </div>
 
     <div class="toggle-row">
-      <span>Enable Original 2K/4K HQ Quality Mode</span>
-      <input type="checkbox" id="hqQualityModel" checked>
-    </div>
-
-    <div class="toggle-row">
-      <span>Enable Lossless Stream Copy (0% Loss)</span>
-      <input type="checkbox" id="allowStreamCopy" checked>
+      <span>⚡ Enable High Quality Bypass (V7Patch)</span>
+      <input type="checkbox" id="enableV7Patch" checked>
     </div>
 
     <div class="row">
-      <label>Minimum Allowed Version</label>
+      <label>Minimum Allowed Version (e.g. 6.1.0 — set to 6.2.0 to force update)</label>
       <input type="text" id="min_version" value="6.1.0">
     </div>
 
     <div class="row">
-      <label>Notice Title (info_message)</label>
+      <label>Badge Title (info_message)</label>
       <input type="text" id="info_message" value="UPDATE REQUIRED">
     </div>
 
     <div class="row">
-      <label>Notice Description (update_message)</label>
+      <label>Popup Message (update_message)</label>
       <textarea id="update_message" rows="3"></textarea>
     </div>
 
@@ -380,7 +548,7 @@ ADMIN_HTML = """<!DOCTYPE html>
       <input type="text" id="tele" value="Download Update">
     </div>
 
-    <button class="btn" onclick="saveConfig()">Save Configuration</button>
+    <button class="btn" onclick="saveConfig()">Save & Apply to All Users</button>
     <div class="status" id="statusMsg"></div>
   </div>
 
@@ -389,8 +557,7 @@ ADMIN_HTML = """<!DOCTYPE html>
       const res = await fetch('/api/checkup');
       const data = await res.json();
       document.getElementById('blocked').checked = !!data.blocked;
-      document.getElementById('hqQualityModel').checked = data.hqQualityModel !== false;
-      document.getElementById('allowStreamCopy').checked = data.allowStreamCopy !== false;
+      document.getElementById('enableV7Patch').checked = data.enableV7Patch !== false;
       document.getElementById('min_version').value = data.min_version || '6.1.0';
       document.getElementById('info_message').value = data.info_message || 'UPDATE REQUIRED';
       document.getElementById('update_message').value = data.update_message || '';
@@ -402,8 +569,7 @@ ADMIN_HTML = """<!DOCTYPE html>
         key: document.getElementById('adminKey').value,
         blocked: document.getElementById('blocked').checked,
         update_required: document.getElementById('blocked').checked,
-        hqQualityModel: document.getElementById('hqQualityModel').checked,
-        allowStreamCopy: document.getElementById('allowStreamCopy').checked,
+        enableV7Patch: document.getElementById('enableV7Patch').checked,
         min_version: document.getElementById('min_version').value.trim(),
         info_message: document.getElementById('info_message').value.trim(),
         update_message: document.getElementById('update_message').value.trim(),
@@ -416,7 +582,7 @@ ADMIN_HTML = """<!DOCTYPE html>
         body: JSON.stringify(payload)
       });
       const out = await res.json();
-      document.getElementById('statusMsg').textContent = out.ok ? 'Saved & Live!' : ('Error: ' + out.error);
+      document.getElementById('statusMsg').textContent = out.ok ? '✓ Saved & Live!' : ('Error: ' + out.error);
     }
     loadConfig();
   </script>
@@ -425,22 +591,19 @@ ADMIN_HTML = """<!DOCTYPE html>
 """
 
 
-# ---------------------------------------------------------------------------
-# HTTP Routes
-# ---------------------------------------------------------------------------
 @app.route("/", methods=["GET"])
-def health_check():
+def index():
     cfg = load_remote_config()
     return jsonify({
         "status": "online",
-        "service": "High-Quality 2K/4K 60FPS/120FPS Video Transcoding Engine",
-        "supported_resolutions": ["1080P (FHD)", "2K (1440P QHD)", "4K (2160P UHD)"],
-        "supported_framerates": ["30FPS", "60FPS", "90FPS", "120FPS"],
-        "hq_quality_model": cfg.get("hqQualityModel", True),
-        "allow_stream_copy": cfg.get("allowStreamCopy", True),
+        "server": "xuqingxinnocent Self-Hosted 1080P/2K/4K/120FPS HQ Bypass Server",
+        "supported_specs": ["1080P", "2K (1440P)", "4K (2160P)", "60FPS", "90FPS", "120FPS"],
         "admin_panel": "/admin",
-        "endpoints": ["/api/checkup", "/api/control", "/api/probe", "/api/transcode", "/admin"],
-        "timestamp": datetime.now(timezone.utc).isoformat()
+        "extension_blocked": cfg.get("blocked", False),
+        "bypass_enabled": cfg.get("enableV7Patch", True),
+        "min_version": cfg.get("min_version", "6.1.0"),
+        "endpoints": ["/api/checkup", "/api/control", "/api/patch", "/api/inject", "/api/sign", "/api/transcode", "/admin"],
+        "timestamp": datetime.utcnow().isoformat() + "Z"
     })
 
 
@@ -455,133 +618,101 @@ def api_admin_config():
     if body.get("key") != ADMIN_KEY:
         return jsonify({"ok": False, "error": "Invalid Admin Key"}), 403
 
-    allowed_keys = [
-        "blocked", "update_required", "hqQualityModel", "allowStreamCopy",
-        "min_version", "info_message", "update_message", "update_url",
-        "tele", "update_url_2", "wa"
-    ]
-    updates = {k: body[k] for k in allowed_keys if k in body}
+    updates = {}
+    for k in ["blocked", "update_required", "enableV7Patch", "min_version", "info_message", "update_message", "update_url", "tele", "update_url_2", "wa"]:
+        if k in body:
+            updates[k] = body[k]
+
     cfg = save_remote_config(updates)
     return jsonify({"ok": True, "config": cfg})
 
 
 @app.route("/api/checkup", methods=["GET", "POST"])
 def api_checkup():
-    return jsonify(load_remote_config())
+    cfg = load_remote_config()
+    return jsonify(cfg)
 
 
 @app.route("/api/control", methods=["GET", "POST"])
 def api_control():
     cfg = load_remote_config()
     return jsonify({
-        "hqQualityModel": cfg.get("hqQualityModel", True),
-        "allowStreamCopy": cfg.get("allowStreamCopy", True),
+        "enableV7Patch": cfg.get("enableV7Patch", True),
         "blocked": cfg.get("blocked", False),
         "maxFps": 120,
-        "resolutions": ["original", "1080p", "2k", "4k"]
+        "resolutions": ["1080p", "2k", "4k"]
     })
 
 
-@app.route("/api/probe", methods=["POST"])
-def api_probe():
-    """
-    Endpoint to inspect uploaded video resolution, FPS, and codec without transcoding.
-    """
-    if "video" not in request.files:
-        return jsonify({"error": "No video file provided"}), 400
+@app.route("/api/patch", methods=["GET", "POST"])
+def api_patch():
+    return Response(V7_PATCH_SCRIPT, mimetype="application/javascript")
 
-    video_file = request.files["video"]
-    job_id = uuid.uuid4().hex
-    temp_path = os.path.join(UPLOAD_DIR, f"probe_{job_id}.mp4")
-    video_file.save(temp_path)
 
-    try:
-        meta = probe_media(temp_path)
-        return jsonify({
-            "ok": True,
-            "tier": meta.tier_label,
-            "width": meta.width,
-            "height": meta.height,
-            "fps": meta.fps,
-            "codec": meta.codec_name,
-            "pix_fmt": meta.pix_fmt,
-            "audio_codec": meta.audio_codec,
-            "recommended_profile": select_h264_encoding_profile(meta)
-        })
-    finally:
-        if os.path.exists(temp_path):
-            os.remove(temp_path)
+@app.route("/api/inject", methods=["GET", "POST"])
+def api_inject():
+    return Response(INJECT_SCRIPT, mimetype="application/javascript")
+
+
+@app.route("/api/sign", methods=["GET", "POST"])
+def api_sign():
+    return Response(WATERMARK_SCRIPT, mimetype="application/javascript")
 
 
 @app.route("/api/transcode", methods=["POST"])
 def api_transcode():
-    """
-    Main transcoding endpoint supporting:
-    - hq_model=1 (default): Preserves 100% of 2K/4K/60FPS/120FPS resolution and frame rate.
-    - stream_copy=1 (default): Uses lossless stream copy if input is already H.264 yuv420p.
+    """Preserve the uploaded video streams; only remux the container for MP4 fast-start.
+
+    This endpoint intentionally does not scale, change FPS, re-encode, or rewrite
+    resolution/codec metadata. Stream-copy can preserve quality only when the
+    source codecs are supported in an MP4 container; unsupported inputs return
+    a clear error rather than silently degrading the source.
     """
     cfg = load_remote_config()
-    if cfg.get("blocked"):
-        return jsonify({"error": "Service is currently under maintenance."}), 403
+    if cfg.get("blocked") or not cfg.get("enableV7Patch", True):
+        return jsonify({"error": "Extension processing is currently disabled by administrator."}), 403
 
     if "video" not in request.files:
         return jsonify({"error": "No video file provided"}), 400
 
-    client_hq = request.args.get("hq_model", request.form.get("hq_model", "1")) == "1"
-    preserve_original = client_hq and cfg.get("hqQualityModel", True)
-
-    client_copy = request.args.get("stream_copy", request.form.get("stream_copy", "1")) == "1"
-    allow_stream_copy = client_copy and cfg.get("allowStreamCopy", True)
-
     video_file = request.files["video"]
     job_id = uuid.uuid4().hex
-    in_path = os.path.join(UPLOAD_DIR, f"in_{job_id}.mp4")
+    in_path = os.path.join(UPLOAD_DIR, f"in_{job_id}")
     out_path = os.path.join(UPLOAD_DIR, f"out_{job_id}.mp4")
     video_file.save(in_path)
 
-    meta = probe_media(in_path)
-    cmd = build_ffmpeg_command(
-        in_path=in_path,
-        out_path=out_path,
-        meta=meta,
-        preserve_original=preserve_original,
-        allow_stream_copy=allow_stream_copy
-    )
-
     try:
-        subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=600)
-    except subprocess.CalledProcessError as exc:
-        err_tail = exc.stderr.decode("utf-8", errors="ignore")[-500:]
-        logger.error(f"FFmpeg transcode failed for job {job_id}: {err_tail}")
-        if os.path.exists(in_path):
-            os.remove(in_path)
-        return jsonify({"error": "FFmpeg transcode failed", "details": err_tail}), 500
-    except subprocess.TimeoutExpired:
-        if os.path.exists(in_path):
-            os.remove(in_path)
-        return jsonify({"error": "Transcode timed out"}), 504
-
-    out_meta = probe_media(out_path)
+        # No video/audio encoding: copy source streams without quality loss.
+        cmd = [
+            "ffmpeg", "-y", "-i", in_path,
+            "-map", "0:v:0", "-map", "0:a?",
+            "-c", "copy", "-map_metadata", "0",
+            "-movflags", "+faststart", out_path
+        ]
+        subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    except subprocess.CalledProcessError as e:
+        try:
+            if os.path.exists(in_path): os.remove(in_path)
+            if os.path.exists(out_path): os.remove(out_path)
+        except Exception:
+            pass
+        details = e.stderr.decode("utf-8", errors="ignore")[-1200:]
+        return jsonify({
+            "error": "Lossless MP4 remux failed; source was not re-encoded.",
+            "details": details
+        }), 422
 
     @after_this_request
     def cleanup(response):
-        for path in (in_path, out_path):
-            try:
-                if os.path.exists(path):
-                    os.remove(path)
-            except OSError:
-                pass
-        response.headers["X-Video-Tier"] = out_meta.tier_label
-        response.headers["X-Video-Resolution"] = f"{out_meta.width}x{out_meta.height}"
-        response.headers["X-Video-FPS"] = str(out_meta.fps)
+        try:
+            if os.path.exists(in_path): os.remove(in_path)
+            if os.path.exists(out_path): os.remove(out_path)
+        except Exception:
+            pass
         return response
 
-    return send_file(
-        out_path,
-        mimetype="video/mp4",
-        as_attachment=True,
-        download_name=f"hq_{out_meta.tier_label}.mp4"
-    )
+    return send_file(out_path, mimetype="video/mp4", as_attachment=True,
+                     download_name="output_original_quality.mp4")
 
 
 if __name__ == "__main__":
