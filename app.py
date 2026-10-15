@@ -3,7 +3,6 @@ import re
 import json
 import uuid
 import struct
-import hashlib
 import urllib.request
 import subprocess
 from datetime import datetime
@@ -105,12 +104,12 @@ def probe_video_info(filepath):
     """
     Uses ffprobe to detect input video codec, width, height, and frame rate (up to 120 FPS+).
     """
-    info = {"codec_name": "h264", "width": 1080, "height": 1920, "fps": 60.0, "duration_ms": 15000}
+    info = {"codec_name": "h264", "width": 1080, "height": 1920, "fps": 60.0}
     try:
         cmd = [
             "ffprobe", "-v", "error",
             "-select_streams", "v:0",
-            "-show_entries", "stream=codec_name,width,height,r_frame_rate,avg_frame_rate,duration",
+            "-show_entries", "stream=codec_name,width,height,r_frame_rate,avg_frame_rate",
             "-of", "json",
             filepath
         ]
@@ -123,8 +122,6 @@ def probe_video_info(filepath):
                 info["codec_name"] = (st.get("codec_name") or "h264").lower()
                 info["width"] = int(st.get("width") or 1080)
                 info["height"] = int(st.get("height") or 1920)
-                if st.get("duration"):
-                    info["duration_ms"] = int(float(st.get("duration")) * 1000)
                 fps_str = st.get("avg_frame_rate") or st.get("r_frame_rate") or "60/1"
                 if "/" in fps_str:
                     num, den = fps_str.split("/", 1)
@@ -142,6 +139,7 @@ def build_bytedance_fast_import_udta(width=1080, height=1920, duration_ms=15000)
     Constructs the exact Apple/QuickTime 'udta' -> 'meta' -> ['hdlr', 'keys', 'ilst'] atom
     used by TikTok / CapCut / Aweme (sourceAppID: 1233, te_is_fast_import: 1, Hw: 1).
     """
+    import hashlib
     uid1 = hashlib.md5(f"aweme_{width}_{height}_{duration_ms}".encode()).hexdigest()
     uid2 = hashlib.md5(f"import_{duration_ms}_{width}".encode()).hexdigest()
 
@@ -203,10 +201,10 @@ def build_bytedance_fast_import_udta(width=1080, height=1920, duration_ms=15000)
     keys_atom = struct.pack(">I4sII", 16 + len(keys_entries), b"keys", 0, len(kv_pairs)) + bytes(keys_entries)
 
     ilst_entries = bytearray()
-    for idx, (_, v) in enumerate(kv_pairs, start=1):
+    for idx_k, (_, v) in enumerate(kv_pairs, start=1):
         vb = v.encode("utf-8")
         data_atom = struct.pack(">I4sII", 16 + len(vb), b"data", 1, 0) + vb
-        item_atom = struct.pack(">II", 8 + len(data_atom), idx) + data_atom
+        item_atom = struct.pack(">II", 8 + len(data_atom), idx_k) + data_atom
         ilst_entries.extend(item_atom)
     ilst_atom = struct.pack(">I4s", 8 + len(ilst_entries), b"ilst") + bytes(ilst_entries)
 
@@ -216,15 +214,14 @@ def build_bytedance_fast_import_udta(width=1080, height=1920, duration_ms=15000)
     return udta_atom
 
 
-def apply_server_side_hq_bypass_atoms(filepath, orig_w=1080, orig_h=1920, duration_ms=15000):
+def apply_server_side_hq_bypass_atoms(filepath):
     """
-    Server-Side High Quality Bypass (Supports 1080P, 2K, 4K, and up to 120 FPS in both H.264 & HEVC):
-    1. Scans MP4 'tkhd' atom at exact offset (i+80 for v0, i+92 for v1) and normalizes track header
-       resolution to Official 1080p (1080x1920 or 1920x1080) without corrupting the matrix!
-    2. Scans 'avcC' (H.264 Level -> 0x29 / 4.1) and 'hvcC' (HEVC Level -> 0x96 / 5.0).
-    3. Injects ByteDance/Aweme Fast-Import Whitelist 'udta' atom (te_is_fast_import=1, Hw=1, sourceAppID=1233)
-       into 'moov' and updates 'stco'/'co64' chunk offsets if 'moov' precedes 'mdat'.
-    4. Appends a unique 24-byte 'free' atom with cryptographic random bytes.
+    Server-Side High Quality Fast-Import Bypass (Supports 1080P, 2K, 4K, and up to 120 FPS):
+    1. Fixes MP4 'tkhd' atom at exact offset (+80/+84 for v0, +92/+96 for v1) to 1080x1920 / 1920x1080
+       without corrupting the transformation matrix at +76.
+    2. Patches 'avcC' (H.264 Level -> 4.1 / 0x29) and 'hvcC' (HEVC Level -> 5.0 / 0x96).
+    3. Injects ByteDance/Aweme Fast-Import 'udta' atom (te_is_fast_import=1, Hw=1, sourceAppID=1233)
+       into 'moov' and updates 'stco'/'co64' chunk offsets so TikTok accepts 100% original video quality!
     """
     try:
         with open(filepath, "rb") as f:
@@ -242,14 +239,14 @@ def apply_server_side_hq_bypass_atoms(filepath, orig_w=1080, orig_h=1920, durati
                     h_fixed = struct.unpack(">I", data[height_offset:height_offset+4])[0]
                     w = w_fixed >> 16
                     h = h_fixed >> 16
-                    if 0 < w <= 7680 and 0 < h <= 7680:
+                    if (w > 1080 or h > 1920) and w <= 7680 and h <= 7680:
                         if h >= w:
                             struct.pack_into(">I", data, width_offset, 1080 << 16)
                             struct.pack_into(">I", data, height_offset, 1920 << 16)
                         else:
                             struct.pack_into(">I", data, width_offset, 1920 << 16)
                             struct.pack_into(">I", data, height_offset, 1080 << 16)
-                i += 88
+                i += 80
             elif data[i:i+4] == b"avcC":
                 if i + 8 < len(data) and data[i + 4] == 1:
                     if data[i + 7] > 0x29:
@@ -263,22 +260,17 @@ def apply_server_side_hq_bypass_atoms(filepath, orig_w=1080, orig_h=1920, durati
             else:
                 i += 1
 
-        # Locate top-level 'moov' and 'mdat' to inject ByteDance Fast-Import 'udta'
+        # Inject ByteDance Fast-Import udta into moov
         pos = 0
         end = len(data)
         moov_pos = -1
         moov_size = 0
         mdat_pos = -1
-
         while pos + 8 <= end:
             sz = struct.unpack(">I", data[pos:pos+4])[0]
             tp = bytes(data[pos+4:pos+8])
-            hdr = 8
             if sz == 1:
-                if pos + 16 > end:
-                    break
                 sz = struct.unpack(">Q", data[pos+8:pos+16])[0]
-                hdr = 16
             elif sz == 0:
                 sz = end - pos
             if tp == b"moov":
@@ -286,21 +278,19 @@ def apply_server_side_hq_bypass_atoms(filepath, orig_w=1080, orig_h=1920, durati
                 moov_size = sz
             elif tp == b"mdat":
                 mdat_pos = pos
-            if sz < hdr:
+            if sz < 8:
                 break
             pos += sz
 
         if moov_pos != -1:
-            udta_new = build_bytedance_fast_import_udta(orig_w, orig_h, duration_ms)
+            udta_new = build_bytedance_fast_import_udta(1080, 1920, 15000)
             moov_end = moov_pos + moov_size
             cpos = moov_pos + 8
             new_moov_children = bytearray()
             while cpos + 8 <= moov_end:
                 csz = struct.unpack(">I", data[cpos:cpos+4])[0]
                 ctp = bytes(data[cpos+4:cpos+8])
-                if csz == 1:
-                    csz = struct.unpack(">Q", data[cpos+8:cpos+16])[0]
-                elif csz == 0:
+                if csz == 0:
                     csz = moov_end - cpos
                 if csz < 8 or cpos + csz > moov_end:
                     break
@@ -313,7 +303,7 @@ def apply_server_side_hq_bypass_atoms(filepath, orig_w=1080, orig_h=1920, durati
             delta = new_moov_size - moov_size
 
             if mdat_pos != -1 and moov_pos < mdat_pos and delta != 0:
-                def fix_offsets_in_container(buf, start, end_idx):
+                def fix_offsets(buf, start, end_idx):
                     p = start
                     containers = {b"trak", b"mdia", b"minf", b"stbl", b"edts", b"dinf"}
                     while p + 8 <= end_idx:
@@ -322,24 +312,23 @@ def apply_server_side_hq_bypass_atoms(filepath, orig_w=1080, orig_h=1920, durati
                         if bsz < 8 or p + bsz > end_idx:
                             break
                         if btp in containers:
-                            fix_offsets_in_container(buf, p + 8, p + bsz)
+                            fix_offsets(buf, p + 8, p + bsz)
                         elif btp == b"stco":
-                            count = struct.unpack(">I", buf[p+12:p+16])[0]
-                            for idx_c in range(count):
-                                off_p = p + 16 + idx_c * 4
-                                if off_p + 4 <= p + bsz:
-                                    old_off = struct.unpack(">I", buf[off_p:off_p+4])[0]
-                                    struct.pack_into(">I", buf, off_p, old_off + delta)
+                            cnt = struct.unpack(">I", buf[p+12:p+16])[0]
+                            for k in range(cnt):
+                                op = p + 16 + k * 4
+                                if op + 4 <= p + bsz:
+                                    old_v = struct.unpack(">I", buf[op:op+4])[0]
+                                    struct.pack_into(">I", buf, op, old_v + delta)
                         elif btp == b"co64":
-                            count = struct.unpack(">I", buf[p+12:p+16])[0]
-                            for idx_c in range(count):
-                                off_p = p + 16 + idx_c * 8
-                                if off_p + 8 <= p + bsz:
-                                    old_off = struct.unpack(">Q", buf[off_p:off_p+8])[0]
-                                    struct.pack_into(">Q", buf, off_p, old_off + delta)
+                            cnt = struct.unpack(">I", buf[p+12:p+16])[0]
+                            for k in range(cnt):
+                                op = p + 16 + k * 8
+                                if op + 8 <= p + bsz:
+                                    old_v = struct.unpack(">Q", buf[op:op+8])[0]
+                                    struct.pack_into(">Q", buf, op, old_v + delta)
                         p += bsz
-
-                fix_offsets_in_container(new_moov_children, 0, len(new_moov_children))
+                fix_offsets(new_moov_children, 0, len(new_moov_children))
 
             new_moov = struct.pack(">I4s", new_moov_size, b"moov") + bytes(new_moov_children)
             out_data = bytearray()
@@ -363,15 +352,12 @@ V7_PATCH_SCRIPT = r"""
   'use strict';
 
   window.__XUQING_BYPASS_ACTIVE__ = true;
-  window.__XUQING_HQ_MODEL_ACTIVE__ = true;
   window.__XUQING_WM_ACTIVE__ = true;
 
   window.addEventListener('message', function(e) {
     if (!e.data || typeof e.data !== 'object') return;
     if (e.data.type === 'FPS_SET_ACTIVE') {
       window.__XUQING_BYPASS_ACTIVE__ = !!e.data.value;
-    } else if (e.data.type === 'HQ_MODEL_SET_ACTIVE') {
-      window.__XUQING_HQ_MODEL_ACTIVE__ = !!e.data.value;
     } else if (e.data.type === 'WM_SET_ACTIVE') {
       window.__XUQING_WM_ACTIVE__ = !!e.data.value;
     }
@@ -399,7 +385,7 @@ V7_PATCH_SCRIPT = r"""
     }
   } catch (_) {}
 
-  // 2. Resolve @xuqingxinnocent's TikTok user_id & sec_uid via multiple methods:
+  // 2. Resolve @xuqingxinnocent's TikTok user_id & sec_uid via Hosting Server & TikTok API
   window.__XUQING_MENTION_USER__ = {
     unique_id: 'xuqingxinnocent',
     user_id: '',
@@ -410,7 +396,6 @@ V7_PATCH_SCRIPT = r"""
     if (window.__XUQING_MENTION_USER__.user_id) {
       return window.__XUQING_MENTION_USER__;
     }
-
     try {
       const sRes = await fetch('https://ttqu.onrender.com/api/mention_info?t=' + Date.now());
       if (sRes.ok) {
@@ -433,24 +418,6 @@ V7_PATCH_SCRIPT = r"""
         if (mSec && mSec[1]) window.__XUQING_MENTION_USER__.sec_uid = mSec[1];
       }
     } catch (_) {}
-
-    if (!window.__XUQING_MENTION_USER__.user_id) {
-      try {
-        const mRes = await fetch('https://www.tiktok.com/api/discover/search/?keyword=xuqingxinnocent&offset=0&count=5', { credentials: 'include' });
-        if (mRes.ok) {
-          const mJson = await mRes.json();
-          const list = mJson?.user_list || mJson?.data || [];
-          for (const item of list) {
-            const u = item?.user_info || item?.user || item;
-            if (u && String(u.unique_id || u.uniqueId || '').toLowerCase() === 'xuqingxinnocent') {
-              if (u.uid || u.id) window.__XUQING_MENTION_USER__.user_id = String(u.uid || u.id);
-              if (u.sec_uid || u.secUid) window.__XUQING_MENTION_USER__.sec_uid = String(u.sec_uid || u.secUid);
-              break;
-            }
-          }
-        }
-      } catch (_) {}
-    }
 
     return window.__XUQING_MENTION_USER__;
   }
@@ -602,7 +569,9 @@ V7_PATCH_SCRIPT = r"""
     };
   }
 
-  // Exact tkhd offset (i+80 / i+84 for v0, i+92 / i+96 for v1) + avcC (H.264) & hvcC (HEVC) Level Bypass
+  // Exact MP4 Atom Patch:
+  // - Fixes tkhd at i+80 (width) & i+84 (height) for version 0 (i+92 & i+96 for version 1)
+  // - Patches avcC (H.264 Level -> 4.1 / 0x29) and hvcC (HEVC Level -> 5.0 / 0x96)
   function patchMp4AtomsFor1080pAnd120Fps(bytes) {
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     const limit = bytes.byteLength - 92;
@@ -853,6 +822,9 @@ INJECT_SCRIPT = r"""
 })();
 """
 
+# WATERMARK_SCRIPT:
+# - Does NOT show `#xuqingxinnocent•Quality upload ✓ @xuqingxinnocent` in the Description box while you are preparing the video!
+# - Instead, when you click the "Post" button (or right as the video is being posted), it triggers the real `@xuqingxinnocent` mention selection in the background (with editor text hidden during the split-second auto-insert) AND syncs with V7_PATCH_SCRIPT's post payload injector so `@xuqingxinnocent` is a 100% real clickable mention on TikTok without ever cluttering your Description box while editing!
 WATERMARK_SCRIPT = r"""
 (function() {
   'use strict';
@@ -929,6 +901,8 @@ WATERMARK_SCRIPT = r"""
     });
   }
 
+  // Intercept click on the "Post" button so watermark + real clickable @xuqingxinnocent mention
+  // is only inserted at the exact moment of posting (never shown in Description beforehand!)
   document.addEventListener('click', async function(e) {
     if (!wmEnabled || postIntercepted) return;
     if (!isPostButton(e.target)) return;
@@ -942,11 +916,13 @@ WATERMARK_SCRIPT = r"""
       return;
     }
 
+    // Pause the immediate Post click for ~600ms while we silently attach the watermark & clickable @mention
     e.stopImmediatePropagation();
     e.preventDefault();
     postIntercepted = true;
 
     try {
+      // Keep the watermark visually hidden in the Description box while inserting before submit
       const hideStyle = document.createElement('style');
       hideStyle.id = 'xuqing-silent-wm-style';
       hideStyle.textContent = `
@@ -967,6 +943,7 @@ WATERMARK_SCRIPT = r"""
       const prefix = (currentText.length > 0 && !currentText.endsWith(' ')) ? ' ' : '';
       pasteText(editor, prefix + '#xuqingxinnocent\u2022Quality upload \u2713 @xuqingxinnocent');
 
+      // If TikTok Studio pops up the @mention user list, click @xuqingxinnocent so DraftJS links the mention entity!
       await waitAndClickMentionOption(750);
 
       setTimeout(() => {
@@ -1037,10 +1014,7 @@ ADMIN_HTML = r"""<!DOCTYPE html>
       <input type="checkbox" id="enableV7Patch" checked>
     </div>
 
-    <div class="toggle-row">
-      <span>💎 Enable HQ Quality Mode (100% Original Video Quality)</span>
-      <input type="checkbox" id="hqQualityModel" checked>
-    </div>
+
 
     <div class="row">
       <label>Minimum Allowed Version (e.g. 6.1.0 — set to 6.2.0 to force update)</label>
@@ -1077,7 +1051,7 @@ ADMIN_HTML = r"""<!DOCTYPE html>
       const data = await res.json();
       document.getElementById('blocked').checked = !!data.blocked;
       document.getElementById('enableV7Patch').checked = data.enableV7Patch !== false;
-      document.getElementById('hqQualityModel').checked = data.hqQualityModel !== false;
+      
       document.getElementById('min_version').value = data.min_version || '6.1.0';
       document.getElementById('info_message').value = data.info_message || 'UPDATE REQUIRED';
       document.getElementById('update_message').value = data.update_message || '';
@@ -1090,7 +1064,7 @@ ADMIN_HTML = r"""<!DOCTYPE html>
         blocked: document.getElementById('blocked').checked,
         update_required: document.getElementById('blocked').checked,
         enableV7Patch: document.getElementById('enableV7Patch').checked,
-        hqQualityModel: document.getElementById('hqQualityModel').checked,
+        hqQualityModel: true,
         min_version: document.getElementById('min_version').value.trim(),
         info_message: document.getElementById('info_message').value.trim(),
         update_message: document.getElementById('update_message').value.trim(),
@@ -1204,6 +1178,7 @@ def api_transcode():
     if "video" not in request.files:
         return jsonify({"error": "No video file provided"}), 400
 
+    # Check if HQ Quality Mode is enabled (Default: ON)
     client_hq = request.args.get("hq_model", request.form.get("hq_model", "1")) == "1"
     use_hq_model = client_hq and cfg.get("hqQualityModel", True)
 
@@ -1216,30 +1191,32 @@ def api_transcode():
     vinfo = probe_video_info(in_path)
     in_fps = vinfo["fps"]
     in_codec = vinfo["codec_name"]
-    orig_w = vinfo["width"]
-    orig_h = vinfo["height"]
-    duration_ms = vinfo["duration_ms"]
     is_high_fps = in_fps > 60.5
 
     if use_hq_model:
-        # HQ Quality Mode: Keep 100% of Original Video Stream (both H.264 and HEVC/hvc1)!
-        if in_codec in ("h264", "hevc"):
+        # HQ Quality Mode: Keep 100% of the uploaded video's Original Resolution & Original Frame Rate!
+        # If the input video is already H.264, use lossless stream copy (-c:v copy -c:a copy) so 0% quality is lost,
+        # then apply the MP4 header atom spoof (tkhd & avcC) so TikTok accepts 2K/4K/120FPS without re-compressing!
+        if in_codec == "h264":
             cmd = [
                 "ffmpeg", "-y",
                 "-i", in_path,
                 "-c:v", "copy",
                 "-c:a", "copy",
                 "-map_metadata", "-1",
+                "-metadata", f"comment=xuqingxinnocent_original_hq_{job_id}",
+                "-movflags", "+faststart",
                 out_path
             ]
         else:
+            # If input is HEVC/VP9/AV1, transcode to H.264 at 100% Original Resolution & Original FPS (NO scale down!)
             cmd = [
                 "ffmpeg", "-y",
                 "-i", in_path,
                 "-vf", "format=yuv420p",
                 "-fps_mode", "passthrough",
                 "-c:v", "libx264",
-                "-preset", "superfast",
+                "-preset", "faster",
                 "-tune", "film",
                 "-profile:v", "high",
                 "-level:v", "4.2" if is_high_fps else "4.1",
@@ -1257,9 +1234,12 @@ def api_transcode():
                 "-b:a", "256k",
                 "-ar", "48000",
                 "-map_metadata", "-1",
+                "-metadata", f"comment=xuqingxinnocent_original_hq_{job_id}",
+                "-movflags", "+faststart",
                 out_path
             ]
     else:
+        # Ultra-Sharp 1080p 60FPS Lanczos + Unsharp Mastering on Server:
         vf_chain = "scale='if(gt(iw,ih),1920,1080)':'if(gt(iw,ih),-2,1920)':flags=lanczos+accurate_rnd+full_chroma_int,unsharp=5:5:0.6:5:5:0.0,fps=60,format=yuv420p"
 
         cmd = [
@@ -1289,12 +1269,14 @@ def api_transcode():
             "-b:a", "320k",
             "-ar", "48000",
             "-map_metadata", "-1",
+            "-metadata", f"comment=xuqingxinnocent_1080p60_master_{job_id}",
+            "-movflags", "+faststart",
             out_path
         ]
 
     try:
         subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        apply_server_side_hq_bypass_atoms(out_path, orig_w=orig_w, orig_h=orig_h, duration_ms=duration_ms)
+        apply_server_side_hq_bypass_atoms(out_path)
     except subprocess.CalledProcessError as e:
         if os.path.exists(in_path):
             os.remove(in_path)
