@@ -229,6 +229,7 @@ def apply_server_side_hq_bypass_atoms(filepath):
 
         limit = len(data) - 92
         i = 0
+        target_w, target_h = 1080, 1920
         while i < limit:
             if data[i:i+4] == b"tkhd":
                 version = data[i + 4]
@@ -239,14 +240,33 @@ def apply_server_side_hq_bypass_atoms(filepath):
                     h_fixed = struct.unpack(">I", data[height_offset:height_offset+4])[0]
                     w = w_fixed >> 16
                     h = h_fixed >> 16
-                    if (w > 1080 or h > 1920) and w <= 7680 and h <= 7680:
-                        if h >= w:
-                            struct.pack_into(">I", data, width_offset, 1080 << 16)
-                            struct.pack_into(">I", data, height_offset, 1920 << 16)
+                    if w > 0 and h > 0:
+                        if (w > 1080 or h > 1920) and w <= 7680 and h <= 7680:
+                            if h >= w:
+                                target_w, target_h = 1080, 1920
+                            else:
+                                target_w, target_h = 1920, 1080
+                            struct.pack_into(">I", data, width_offset, target_w << 16)
+                            struct.pack_into(">I", data, height_offset, target_h << 16)
+                        elif w < 360 or h < 360:
+                            if h >= w:
+                                target_w, target_h = 1080, 1920
+                            else:
+                                target_w, target_h = 1920, 1080
+                            struct.pack_into(">I", data, width_offset, target_w << 16)
+                            struct.pack_into(">I", data, height_offset, target_h << 16)
                         else:
-                            struct.pack_into(">I", data, width_offset, 1920 << 16)
-                            struct.pack_into(">I", data, height_offset, 1080 << 16)
+                            target_w, target_h = w, h
                 i += 80
+            elif data[i:i+4] in (b"hvc1", b"hev1", b"avc1"):
+                # Fix broken SampleEntry coded_width / coded_height (0x0 -> 352x288 fallback in TikTok!)
+                if i >= 4 and i + 32 <= len(data):
+                    box_sz = struct.unpack(">I", data[i-4:i])[0]
+                    if 86 <= box_sz <= 16384 and data[i+4:i+10] == b"\x00\x00\x00\x00\x00\x00":
+                        cw, ch = struct.unpack(">HH", data[i+28:i+32])
+                        if cw == 0 or ch == 0 or cw < 360 or ch < 360 or cw > 1920 or ch > 1920:
+                            struct.pack_into(">HH", data, i + 28, target_w, target_h)
+                i += 4
             elif data[i:i+4] == b"avcC":
                 if i + 8 < len(data) and data[i + 4] == 1:
                     if data[i + 7] > 0x29:
@@ -575,6 +595,8 @@ V7_PATCH_SCRIPT = r"""
   function patchMp4AtomsFor1080pAnd120Fps(bytes) {
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
     const limit = bytes.byteLength - 92;
+    let targetW = 1080;
+    let targetH = 1920;
     for (let i = 0; i < limit; i++) {
       if (bytes[i] === 0x74 && bytes[i+1] === 0x6B && bytes[i+2] === 0x68 && bytes[i+3] === 0x64) {
         const version = bytes[i + 4];
@@ -585,13 +607,42 @@ V7_PATCH_SCRIPT = r"""
           const hFixed = view.getUint32(heightOffset, false);
           const w = wFixed >>> 16;
           const h = hFixed >>> 16;
-          if ((w > 1080 || h > 1920) && w <= 7680 && h <= 7680) {
-            if (h >= w) {
-              view.setUint32(widthOffset, 1080 << 16, false);
-              view.setUint32(heightOffset, 1920 << 16, false);
+          if (w > 0 && h > 0) {
+            if ((w > 1080 || h > 1920) && w <= 7680 && h <= 7680) {
+              targetW = h >= w ? 1080 : 1920;
+              targetH = h >= w ? 1920 : 1080;
+              view.setUint32(widthOffset, targetW << 16, false);
+              view.setUint32(heightOffset, targetH << 16, false);
+            } else if (w < 360 || h < 360) {
+              targetW = h >= w ? 1080 : 1920;
+              targetH = h >= w ? 1920 : 1080;
+              view.setUint32(widthOffset, targetW << 16, false);
+              view.setUint32(heightOffset, targetH << 16, false);
             } else {
-              view.setUint32(widthOffset, 1920 << 16, false);
-              view.setUint32(heightOffset, 1080 << 16, false);
+              targetW = w;
+              targetH = h;
+            }
+          }
+        }
+      }
+      // Fix stsd -> avc1 / hvc1 / hev1 SampleEntry coded_width & coded_height when 0x0 (causes 352x288 error in TikTok!)
+      else if (
+        (bytes[i] === 0x68 && bytes[i+1] === 0x76 && bytes[i+2] === 0x63 && bytes[i+3] === 0x31) ||
+        (bytes[i] === 0x68 && bytes[i+1] === 0x65 && bytes[i+2] === 0x76 && bytes[i+3] === 0x31) ||
+        (bytes[i] === 0x61 && bytes[i+1] === 0x76 && bytes[i+2] === 0x63 && bytes[i+3] === 0x31)
+      ) {
+        if (i >= 4 && i + 32 <= bytes.byteLength) {
+          const boxSz = view.getUint32(i - 4, false);
+          const isReservedZero = (
+            bytes[i+4] === 0 && bytes[i+5] === 0 && bytes[i+6] === 0 &&
+            bytes[i+7] === 0 && bytes[i+8] === 0 && bytes[i+9] === 0
+          );
+          if (boxSz >= 86 && boxSz <= 16384 && isReservedZero) {
+            const cw = view.getUint16(i + 28, false);
+            const ch = view.getUint16(i + 30, false);
+            if (cw === 0 || ch === 0 || cw < 360 || ch < 360 || cw > 1920 || ch > 1920) {
+              view.setUint16(i + 28, targetW, false);
+              view.setUint16(i + 30, targetH, false);
             }
           }
         }
