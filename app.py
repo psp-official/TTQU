@@ -1246,7 +1246,8 @@ def api_transcode():
 
     in_w = int(vinfo.get("width", 1080) or 1080)
     in_h = int(vinfo.get("height", 1920) or 1920)
-    is_already_1080p = (in_w <= 1080 and in_h <= 1920) or (in_w <= 1920 and in_h <= 1080)
+    # FORCE downscale for ANY video larger than 1080x1920 / 1920x1080 to prevent TikTok 4K compression blur!
+    is_already_1080p = (in_w <= 1080 and in_h <= 1920) or (in_w <= 1920 and in_h <= 1080) and max(in_w, in_h) <= 1920
 
     # Exact 1000077471.mp4 H.264 / AVC (avc1.640028) 1080x1920 @ 60FPS ~24.8 Mbps Downscale Specification:
     # - Container: isom (isom, iso2, avc1, mp41) with +faststart
