@@ -1193,86 +1193,45 @@ def api_transcode():
     in_codec = vinfo["codec_name"]
     is_high_fps = in_fps > 60.5
 
-    if use_hq_model:
-        # HQ Quality Mode: Keep 100% of the uploaded video's Original Resolution & Original Frame Rate!
-        # If the input video is already H.264, use lossless stream copy (-c:v copy -c:a copy) so 0% quality is lost,
-        # then apply the MP4 header atom spoof (tkhd & avcC) so TikTok accepts 2K/4K/120FPS without re-compressing!
-        if in_codec == "h264":
-            cmd = [
-                "ffmpeg", "-y",
-                "-i", in_path,
-                "-c:v", "copy",
-                "-c:a", "copy",
-                "-map_metadata", "-1",
-                "-metadata", f"comment=xuqingxinnocent_original_hq_{job_id}",
-                "-movflags", "+faststart",
-                out_path
-            ]
-        else:
-            # If input is HEVC/VP9/AV1, transcode to H.264 at 100% Original Resolution & Original FPS (NO scale down!)
-            cmd = [
-                "ffmpeg", "-y",
-                "-i", in_path,
-                "-vf", "format=yuv420p",
-                "-fps_mode", "passthrough",
-                "-c:v", "libx264",
-                "-preset", "faster",
-                "-tune", "film",
-                "-profile:v", "high",
-                "-level:v", "4.2" if is_high_fps else "4.1",
-                "-crf", "15",
-                "-maxrate", "22M" if is_high_fps else "18M",
-                "-bufsize", "44M" if is_high_fps else "36M",
-                "-g", "120" if is_high_fps else "60",
-                "-keyint_min", "60",
-                "-sc_threshold", "0",
-                "-pix_fmt", "yuv420p",
-                "-color_primaries", "bt709",
-                "-color_trc", "bt709",
-                "-colorspace", "bt709",
-                "-c:a", "aac",
-                "-b:a", "256k",
-                "-ar", "48000",
-                "-map_metadata", "-1",
-                "-metadata", f"comment=xuqingxinnocent_original_hq_{job_id}",
-                "-movflags", "+faststart",
-                out_path
-            ]
-    else:
-        # Ultra-Sharp 1080p 60FPS Lanczos + Unsharp Mastering on Server:
-        vf_chain = "scale='if(gt(iw,ih),1920,1080)':'if(gt(iw,ih),-2,1920)':flags=lanczos+accurate_rnd+full_chroma_int,unsharp=5:5:0.6:5:5:0.0,fps=60,format=yuv420p"
+    # Always downscale and master 4K/2K input videos to Ultra-Sharp 1080x1920 @ 60FPS (Lanczos + Unsharp + High Bitrate)
+    vf_chain = (
+        "scale='if(gt(iw,ih),1920,1080)':'if(gt(iw,ih),-2,1920)'"
+        ":flags=lanczos+accurate_rnd+full_chroma_int,"
+        "unsharp=5:5:0.65:3:3:0.25,"
+        "fps=60,"
+        "format=yuv420p"
+    )
 
-        cmd = [
-            "ffmpeg", "-y",
-            "-i", in_path,
-            "-vf", vf_chain,
-            "-vsync", "cfr",
-            "-r", "60",
-            "-c:v", "libx264",
-            "-preset", "superfast",
-            "-tune", "film",
-            "-profile:v", "high",
-            "-level:v", "4.2",
-            "-crf", "16",
-            "-maxrate", "15M",
-            "-bufsize", "30M",
-            "-g", "120",
-            "-keyint_min", "60",
-            "-sc_threshold", "0",
-            "-bf", "2",
-            "-pix_fmt", "yuv420p",
-            "-color_primaries", "bt709",
-            "-color_trc", "bt709",
-            "-colorspace", "bt709",
-            "-color_range", "tv",
-            "-c:a", "aac",
-            "-b:a", "320k",
-            "-ar", "48000",
-            "-map_metadata", "-1",
-            "-metadata", f"comment=xuqingxinnocent_1080p60_master_{job_id}",
-            "-movflags", "+faststart",
-            out_path
-        ]
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", in_path,
+        "-vf", vf_chain,
+        "-fps_mode", "cfr",
+        "-r", "60",
+        "-c:v", "libx264",
+        "-preset", "veryfast",
+        "-tune", "film",
+        "-profile:v", "high",
+        "-level:v", "4.1",
+        "-crf", "15",
+        "-b:v", "12M",
+        "-maxrate", "15M",
+        "-bufsize", "30M",
+        "-g", "120",
+        "-keyint_min", "60",
+        "-sc_threshold", "0",
+        "-pix_fmt", "yuv420p",
+        "-color_primaries", "bt709",
+        "-color_trc", "bt709",
+        "-colorspace", "bt709",
+        "-c:a", "aac",
+        "-b:a", "256k",
+        "-ar", "48000",
+        "-map_metadata", "-1",
+        "-metadata", f"comment=xuqingxinnocent_1080p60_master_{job_id}",
+        "-movflags", "+faststart",
+        out_path
+    ]
 
     try:
         subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
