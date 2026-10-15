@@ -1193,45 +1193,64 @@ def api_transcode():
     in_codec = vinfo["codec_name"]
     is_high_fps = in_fps > 60.5
 
-    # Always downscale and master 4K/2K input videos to Ultra-Sharp 1080x1920 @ 60FPS (Lanczos + Unsharp + High Bitrate)
+    in_w = int(vinfo.get("width", 1080) or 1080)
+    in_h = int(vinfo.get("height", 1920) or 1920)
+    is_already_1080p = (in_w <= 1080 and in_h <= 1920) or (in_w <= 1920 and in_h <= 1080)
+
+    # Exact 1000077469.mp4 libx265 (HEVC hvc1) Ultra-Fast High-Bitrate Downscale Specification:
+    # - Resolution: 1080x1920 (or 1920x1080 for landscape), Lanczos scaling
+    # - Codec: libx265 (-tag:v hvc1), -preset ultrafast, -b:v 31559k (ABR ~22.2-31.5 Mbps)
+    # - Exact x265-params: level-idc=4.1:high-tier=1:open-gop=1:keyint=250:min-keyint=25:bframes=3:b-adapt=0:b-pyramid=1:ref=1:rc-lookahead=5:lookahead-slices=8:scenecut=0:ctu=32:min-cu-size=16:max-tu-size=32:tu-inter-depth=1:tu-intra-depth=1:no-rect=1:no-amp=1:me=0:subme=0:merange=57:no-weightp=1:no-weightb=1:deblock=0,0:no-sao=1:rd=2:early-skip=1:rskip=1:fast-intra=1:psy-rd=2.0:psy-rdoq=0.0:qcomp=0.60:qpstep=4:ipratio=1.40:pbratio=1.30:aq-mode=1:aq-strength=0.0:cutree=1:qg-size=32:range=full:colorprim=bt709:transfer=bt709:colormatrix=bt709:chromaloc=1
+    # - Audio: AAC LC, 48000 Hz, 2 channels, 130k bitrate
     vf_chain = (
         "scale='if(gt(iw,ih),1920,1080)':'if(gt(iw,ih),-2,1920)'"
         ":flags=lanczos+accurate_rnd+full_chroma_int,"
-        "unsharp=5:5:0.65:3:3:0.25,"
-        "fps=60,"
-        "format=yuv420p"
+        "format=yuvj420p"
     )
 
-    cmd = [
-        "ffmpeg", "-y",
-        "-i", in_path,
-        "-vf", vf_chain,
-        "-fps_mode", "cfr",
-        "-r", "60",
-        "-c:v", "libx264",
-        "-preset", "veryfast",
-        "-tune", "film",
-        "-profile:v", "high",
-        "-level:v", "4.1",
-        "-crf", "15",
-        "-b:v", "12M",
-        "-maxrate", "15M",
-        "-bufsize", "30M",
-        "-g", "120",
-        "-keyint_min", "60",
-        "-sc_threshold", "0",
-        "-pix_fmt", "yuv420p",
-        "-color_primaries", "bt709",
-        "-color_trc", "bt709",
-        "-colorspace", "bt709",
-        "-c:a", "aac",
-        "-b:a", "256k",
-        "-ar", "48000",
-        "-map_metadata", "-1",
-        "-metadata", f"comment=xuqingxinnocent_1080p60_master_{job_id}",
-        "-movflags", "+faststart",
-        out_path
-    ]
+    x265_exact_params = (
+        "level-idc=4.1:high-tier=1:open-gop=1:keyint=250:min-keyint=25:"
+        "bframes=3:b-adapt=0:b-pyramid=1:ref=1:rc-lookahead=5:lookahead-slices=8:"
+        "scenecut=0:ctu=32:min-cu-size=16:max-tu-size=32:tu-inter-depth=1:tu-intra-depth=1:"
+        "no-rect=1:no-amp=1:me=0:subme=0:merange=57:no-weightp=1:no-weightb=1:"
+        "deblock=0,0:no-sao=1:rd=2:early-skip=1:rskip=1:fast-intra=1:"
+        "psy-rd=2.0:psy-rdoq=0.0:qcomp=0.60:qpstep=4:ipratio=1.40:pbratio=1.30:"
+        "aq-mode=1:aq-strength=0.0:cutree=1:qg-size=32:"
+        "range=full:colorprim=bt709:transfer=bt709:colormatrix=bt709:chromaloc=1"
+    )
+
+    if is_already_1080p and in_codec in ("hevc", "h265", "h264"):
+        # Already 1080p: keep 100% lossless bitstream (-c copy) + apply faststart & atoms
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", in_path,
+            "-c:v", "copy",
+            "-c:a", "copy",
+            "-movflags", "+faststart",
+            out_path
+        ]
+    else:
+        # 4K / 2K input: Downscale using exact 1000077469.mp4 libx265 specification!
+        cmd = [
+            "ffmpeg", "-y",
+            "-i", in_path,
+            "-vf", vf_chain,
+            "-c:v", "libx265",
+            "-tag:v", "hvc1",
+            "-preset", "ultrafast",
+            "-b:v", "31559k",
+            "-x265-params", x265_exact_params,
+            "-color_range", "pc",
+            "-color_primaries", "bt709",
+            "-color_trc", "bt709",
+            "-colorspace", "bt709",
+            "-c:a", "aac",
+            "-b:a", "130k",
+            "-ar", "48000",
+            "-ac", "2",
+            "-movflags", "+faststart",
+            out_path
+        ]
 
     try:
         subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
