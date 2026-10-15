@@ -1197,30 +1197,23 @@ def api_transcode():
     in_h = int(vinfo.get("height", 1920) or 1920)
     is_already_1080p = (in_w <= 1080 and in_h <= 1920) or (in_w <= 1920 and in_h <= 1080)
 
-    # Exact 1000077469.mp4 libx265 (HEVC hvc1) Ultra-Fast High-Bitrate Downscale Specification:
+    # Exact 1000077471.mp4 H.264 / AVC (avc1.640028) 1080x1920 @ 60FPS ~24.8 Mbps Downscale Specification:
+    # - Container: isom (isom, iso2, avc1, mp41) with +faststart
     # - Resolution: 1080x1920 (or 1920x1080 for landscape), Lanczos scaling
-    # - Codec: libx265 (-tag:v hvc1), -preset ultrafast, -b:v 31559k (ABR ~22.2-31.5 Mbps)
-    # - Exact x265-params: level-idc=4.1:high-tier=1:open-gop=1:keyint=250:min-keyint=25:bframes=3:b-adapt=0:b-pyramid=1:ref=1:rc-lookahead=5:lookahead-slices=8:scenecut=0:ctu=32:min-cu-size=16:max-tu-size=32:tu-inter-depth=1:tu-intra-depth=1:no-rect=1:no-amp=1:me=0:subme=0:merange=57:no-weightp=1:no-weightb=1:deblock=0,0:no-sao=1:rd=2:early-skip=1:rskip=1:fast-intra=1:psy-rd=2.0:psy-rdoq=0.0:qcomp=0.60:qpstep=4:ipratio=1.40:pbratio=1.30:aq-mode=1:aq-strength=0.0:cutree=1:qg-size=32:range=full:colorprim=bt709:transfer=bt709:colormatrix=bt709:chromaloc=1
-    # - Audio: AAC LC, 48000 Hz, 2 channels, 130k bitrate
+    # - Codec: libx264 (-tag:v avc1), High Profile, Level 4.0 (0x640028)
+    # - Frame Rate & Timescale: 60 FPS, video_track_timescale=57600 (sample_delta=960)
+    # - Keyframes (GOP): keyint=120, min-keyint=120, scenecut=0 (every 120 frames: 1, 118, 238, 358, 478, 598)
+    # - Bitrate: ~24.8 Mbps (-b:v 24800k -maxrate 28000k -bufsize 56000k)
+    # - Color (colr nclx): Primaries=1 (bt709), Transfer=13 (iec61966-2-1 / sRGB), Matrix=1 (bt709), Full Range (pc / 0x80)
+    # - Audio: AAC LC (mp4a.40.2), 48000 Hz, 2 channels (Stereo), 160k
     vf_chain = (
         "scale='if(gt(iw,ih),1920,1080)':'if(gt(iw,ih),-2,1920)'"
         ":flags=lanczos+accurate_rnd+full_chroma_int,"
+        "fps=60,"
         "format=yuvj420p"
     )
 
-    x265_exact_params = (
-        "level-idc=4.1:high-tier=1:open-gop=1:keyint=250:min-keyint=25:"
-        "bframes=3:b-adapt=0:b-pyramid=1:ref=1:rc-lookahead=5:lookahead-slices=8:"
-        "scenecut=0:ctu=32:min-cu-size=16:max-tu-size=32:tu-inter-depth=1:tu-intra-depth=1:"
-        "no-rect=1:no-amp=1:me=0:subme=0:merange=57:no-weightp=1:no-weightb=1:"
-        "deblock=0,0:no-sao=1:rd=2:early-skip=1:rskip=1:fast-intra=1:"
-        "psy-rd=2.0:psy-rdoq=0.0:qcomp=0.60:qpstep=4:ipratio=1.40:pbratio=1.30:"
-        "aq-mode=1:aq-strength=0.0:cutree=1:qg-size=32:"
-        "range=full:colorprim=bt709:transfer=bt709:colormatrix=bt709:chromaloc=1"
-    )
-
-    if is_already_1080p and in_codec in ("hevc", "h265", "h264"):
-        # Already 1080p: keep 100% lossless bitstream (-c copy) + apply faststart & atoms
+    if is_already_1080p and in_codec in ("h264", "hevc", "h265"):
         cmd = [
             "ffmpeg", "-y",
             "-i", in_path,
@@ -1230,22 +1223,31 @@ def api_transcode():
             out_path
         ]
     else:
-        # 4K / 2K input: Downscale using exact 1000077469.mp4 libx265 specification!
         cmd = [
             "ffmpeg", "-y",
             "-i", in_path,
             "-vf", vf_chain,
-            "-c:v", "libx265",
-            "-tag:v", "hvc1",
-            "-preset", "ultrafast",
-            "-b:v", "31559k",
-            "-x265-params", x265_exact_params,
+            "-fps_mode", "cfr",
+            "-r", "60",
+            "-video_track_timescale", "57600",
+            "-c:v", "libx264",
+            "-tag:v", "avc1",
+            "-preset", "veryfast",
+            "-profile:v", "high",
+            "-level:v", "4.0",
+            "-b:v", "24800k",
+            "-maxrate", "28000k",
+            "-bufsize", "56000k",
+            "-g", "120",
+            "-keyint_min", "120",
+            "-sc_threshold", "0",
+            "-pix_fmt", "yuvj420p",
             "-color_range", "pc",
             "-color_primaries", "bt709",
-            "-color_trc", "bt709",
+            "-color_trc", "iec61966-2-1",
             "-colorspace", "bt709",
             "-c:a", "aac",
-            "-b:a", "130k",
+            "-b:a", "160k",
             "-ar", "48000",
             "-ac", "2",
             "-movflags", "+faststart",
