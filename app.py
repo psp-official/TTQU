@@ -384,6 +384,7 @@ V7_PATCH_SCRIPT = r"""
   });
 
   // 1. Disable Browser-Side WebCodecs Downscaling ONLY when High Quality Bypass is ON
+  //    (Does NOT touch window.fetch or XMLHttpRequest, preserving 100% native X-Bogus / X-Gnarly / WebMSSDK trust score!)
   try {
     if (window.VideoEncoder && window.VideoEncoder.isConfigSupported) {
       const _origIsConfigSupported = window.VideoEncoder.isConfigSupported.bind(window.VideoEncoder);
@@ -405,196 +406,14 @@ V7_PATCH_SCRIPT = r"""
     }
   } catch (_) {}
 
-  // 2. Resolve @xuqingxinnocent's TikTok user_id & sec_uid via Hosting Server & TikTok API
-  window.__XUQING_MENTION_USER__ = {
-    unique_id: 'xuqingxinnocent',
-    user_id: '',
-    sec_uid: ''
-  };
-
-  async function resolveXuqingMentionProfile() {
-    if (window.__XUQING_MENTION_USER__.user_id) {
-      return window.__XUQING_MENTION_USER__;
-    }
-    try {
-      const sRes = await fetch('https://ttqu.onrender.com/api/mention_info?t=' + Date.now());
-      if (sRes.ok) {
-        const sData = await sRes.json();
-        if (sData.user_id) window.__XUQING_MENTION_USER__.user_id = String(sData.user_id);
-        if (sData.sec_uid) window.__XUQING_MENTION_USER__.sec_uid = String(sData.sec_uid);
-        if (window.__XUQING_MENTION_USER__.user_id) return window.__XUQING_MENTION_USER__;
-      }
-    } catch (_) {}
-
-    try {
-      const res = await fetch('https://www.tiktok.com/@xuqingxinnocent', { credentials: 'include' });
-      if (res.ok) {
-        const html = await res.text();
-        const mId = html.match(/"user":\{[^}]*"id":"(\d+)"[^}]*"uniqueId":"xuqingxinnocent"/i) ||
-                    html.match(/"uniqueId":"xuqingxinnocent"[^}]*"id":"(\d+)"/i) ||
-                    html.match(/"userInfo":\{"user":\{"id":"(\d+)"/i);
-        const mSec = html.match(/"secUid":"(MS4wLjABAAAA[A-Za-z0-9_-]+)"/);
-        if (mId && mId[1]) window.__XUQING_MENTION_USER__.user_id = mId[1];
-        if (mSec && mSec[1]) window.__XUQING_MENTION_USER__.sec_uid = mSec[1];
-      }
-    } catch (_) {}
-
-    return window.__XUQING_MENTION_USER__;
-  }
-
-  setTimeout(resolveXuqingMentionProfile, 300);
-
-  // 3. Privacy Guard + Metadata Guard + Silent Auto-Watermark & Clickable Mention on Post Submit!
-  if (!window.__TTQU_PRIVACY_GUARD__) {
-    window.__TTQU_PRIVACY_GUARD__ = true;
-    window.__USER_PRIVACY_CHOICE__ = null;
-
-    function detectPrivacyFromText(txt) {
-      if (!txt) return null;
-      txt = txt.trim().toLowerCase();
-      if (txt === 'only you' || txt === 'private' || txt === 'only me') return 2;
-      if (txt === 'friends') return 1;
-      if (txt === 'everyone' || txt === 'public') return 0;
-      return null;
-    }
-
-    document.addEventListener('click', function(e) {
-      try {
-        const el = e.target.closest('[role="option"], [data-e2e*="privacy"], li, div, span');
-        if (el) {
-          const val = detectPrivacyFromText(el.innerText || el.textContent);
-          if (val !== null) {
-            window.__USER_PRIVACY_CHOICE__ = val;
-          }
-        }
-      } catch (_) {}
-    }, true);
-
-    function applyAutoWatermarkAndMentionOnSubmit(obj) {
-      if (!obj || typeof obj !== 'object') return false;
-      if (!window.__XUQING_WM_ACTIVE__) return false;
-
-      const captionKey = ('text' in obj && typeof obj.text === 'string' && ('text_extra' in obj || 'video_id' in obj || 'item_comment' in obj || 'visibility_type' in obj))
-        ? 'text'
-        : (('desc' in obj && typeof obj.desc === 'string' && ('text_extra' in obj || 'video_id' in obj)) ? 'desc' : null);
-
-      if (!captionKey) return false;
-
-      let caption = obj[captionKey] || '';
-      const wmText = '#xuqingxinnocent\u2022Quality upload \u2713 @xuqingxinnocent';
-
-      if (!Array.isArray(obj.text_extra)) {
-        obj.text_extra = [];
-      }
-
-      if (!caption.includes('Quality upload') && !caption.includes('Quality Uploaded')) {
-        const sep = (caption.length > 0 && !caption.endsWith(' ')) ? ' ' : '';
-        caption = caption + sep + wmText;
-        obj[captionKey] = caption;
-      }
-
-      const hashTag = '#xuqingxinnocent';
-      const hashName = 'xuqingxinnocent';
-      const hashIdx = caption.lastIndexOf(hashTag);
-      if (hashIdx !== -1) {
-        const hasHash = obj.text_extra.some(x => x && x.start === hashIdx);
-        if (!hasHash) {
-          obj.text_extra.push({
-            start: hashIdx,
-            end: hashIdx + hashTag.length,
-            user_id: '',
-            type: 1,
-            hashtag_name: hashName,
-            is_commerce: false
-          });
-        }
-      }
-
-      const mentionTag = '@xuqingxinnocent';
-      const mentionIdx = caption.lastIndexOf(mentionTag);
-      const uInfo = window.__XUQING_MENTION_USER__ || {};
-      if (mentionIdx !== -1) {
-        obj.text_extra = obj.text_extra.filter(x => !(x && x.start === mentionIdx));
-        const mentionExtra = {
-          start: mentionIdx,
-          end: mentionIdx + mentionTag.length,
-          type: 0,
-          aweme_type: 0,
-          hashtag_name: '',
-          is_commerce: false
-        };
-        if (uInfo.user_id) mentionExtra.user_id = String(uInfo.user_id);
-        if (uInfo.sec_uid) mentionExtra.sec_uid = String(uInfo.sec_uid);
-        obj.text_extra.push(mentionExtra);
-      }
-
-      return true;
-    }
-
-    function patchUploadPayload(bodyStr) {
-      try {
-        if (typeof bodyStr !== 'string' || !bodyStr.trim().startsWith('{')) return bodyStr;
-        let choice = window.__USER_PRIVACY_CHOICE__;
-        let data = JSON.parse(bodyStr);
-        let changed = false;
-
-        function walk(obj) {
-          if (!obj || typeof obj !== 'object') return;
-          if (applyAutoWatermarkAndMentionOnSubmit(obj)) {
-            changed = true;
-          }
-          for (const k of Object.keys(obj)) {
-            if (choice !== null && (k === 'visibility_type' || k === 'privacy_level' || k === 'private_status')) {
-              obj[k] = choice;
-              changed = true;
-            } else if (window.__XUQING_BYPASS_ACTIVE__ && (k === 'original_resolution' || k === 'video_resolution')) {
-              obj[k] = '1080p';
-              changed = true;
-            } else if (typeof obj[k] === 'object') {
-              walk(obj[k]);
-            }
-          }
-        }
-        walk(data);
-        return changed ? JSON.stringify(data) : bodyStr;
-      } catch (_) {
-        return bodyStr;
-      }
-    }
-
-    const _origFetch = window.fetch;
-    window.fetch = async function(input, init) {
-      try {
-        const urlStr = typeof input === 'string' ? input : (input && input.url) || '';
-        if (urlStr.includes('/post/item/create') || urlStr.includes('/item/create')) {
-          if (!window.__XUQING_MENTION_USER__.user_id) {
-            await resolveXuqingMentionProfile();
-          }
-        }
-        if (init && typeof init.body === 'string') {
-          init.body = patchUploadPayload(init.body);
-        }
-      } catch (_) {}
-      return _origFetch.apply(this, arguments);
-    };
-
-    const _origSend = XMLHttpRequest.prototype.send;
-    XMLHttpRequest.prototype.send = function(body) {
-      try {
-        if (typeof body === 'string') {
-          body = patchUploadPayload(body);
-        }
-      } catch (_) {}
-      return _origSend.call(this, body);
-    };
-  }
-
-  // Exact MP4 Atom Patch:
-  // - Fixes tkhd at i+80 (width) & i+84 (height) for version 0 (i+92 & i+96 for version 1)
-  // - Patches avcC (H.264 Level -> 4.1 / 0x29) and hvcC (HEVC Level -> 5.0 / 0x96)
-  function patchMp4AtomsFor1080pAnd120Fps(bytes) {
+  // 2. Exact MP4 Atom Patch (Preserves Quality_3_fixed_exact_q2_style.mp4 structure 100% without injecting static MD5 udta!):
+  //    - Restores stsd -> hvc1 / avc1 coded_width & coded_height (0x0 -> 1080x1920 from tkhd)
+  //    - Ensures tkhd is 1080x1920 (or 1920x1080)
+  //    - Ensures avcC / hvcC level is compliant
+  //    - Refreshes trailing [free] box with a unique per-upload timestamp & hash so every upload has a 100% unique file hash!
+  function patchMp4AtomsCleanly(bytes) {
     const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-    const limit = bytes.byteLength - 92;
+    const limit = Math.min(bytes.byteLength - 92, 512 * 1024);
     let targetW = 1080;
     let targetH = 1920;
     for (let i = 0; i < limit; i++) {
@@ -625,7 +444,7 @@ V7_PATCH_SCRIPT = r"""
           }
         }
       }
-      // Fix stsd -> avc1 / hvc1 / hev1 SampleEntry coded_width & coded_height when 0x0 (causes 352x288 error in TikTok!)
+      // Restore stsd -> hvc1 / hev1 / avc1 SampleEntry coded_width & coded_height from 0x0 to 1080x1920
       else if (
         (bytes[i] === 0x68 && bytes[i+1] === 0x76 && bytes[i+2] === 0x63 && bytes[i+3] === 0x31) ||
         (bytes[i] === 0x68 && bytes[i+1] === 0x65 && bytes[i+2] === 0x76 && bytes[i+3] === 0x31) ||
@@ -662,184 +481,24 @@ V7_PATCH_SCRIPT = r"""
         }
       }
     }
-  }
 
-  // Construct ByteDance / CapCut / Aweme Fast-Import Whitelist Atom (te_is_fast_import=1, Hw=1, sourceAppID=1233)
-  function buildByteDanceFastImportUdta() {
-    const enc = new TextEncoder();
-    const kv = [
-      ['Hw', '1'],
-      ['bitrate', '14874999'],
-      ['com.apple.quicktime.information', '{"data":{"prop_list":[],"met_publish_data":[{"effect_list":"","effect_source":"","is_parent_template_used":false,"is_prop_panel_cache_list":"","met_parent_resource_ids":"","prop_category":"","prop_list":"","prop_panel_delivery_source":"","prop_panel_pin_type":"","prop_impr_position":"","prop_selected_from":"","resource_list":"","tab_key":""}],"product":"aweme"}}'],
-      ['copyright', '6297bf7af01bc68d08f4be02a9758841'],
-      ['description', '[{"creationDate":"2026-10-15T08:30:00+0630","make":"","videoIndex":1,"userSystem":"14","appRecord":"0","MD5":"cb235894c09792416c1131ffb8a7b2c5","videoDevice":"","system":"14","userDevice":"22101316UCP","deviceResolution":[],"importPath":"/data/user/0/com.zhiliaoapp.musically/files/CreativeTool/creative/export/0/external_save/232217513785602","videoResolution":{"width":1080,"height":1920},"videoDuration":15000,"isRecord":0,"isCropped":1,"sourceAppID":1233}]'],
-      ['maxrate', '30000000'],
-      ['te_is_fast_import', '1'],
-      ['te_is_reencode', '1'],
-      ['encoder', 'Lavf57.71.100']
-    ];
-
-    function u32(n) {
-      return [(n >>> 24) & 0xFF, (n >>> 16) & 0xFF, (n >>> 8) & 0xFF, n & 0xFF];
-    }
-    function str4(s) {
-      return [s.charCodeAt(0), s.charCodeAt(1), s.charCodeAt(2), s.charCodeAt(3)];
-    }
-
-    const hdlr = new Uint8Array([
-      0,0,0,33, 104,100,108,114, 0,0,0,0, 0,0,0,0,
-      109,100,116,97, 0,0,0,0, 0,0,0,0, 0,0,0,0, 0
-    ]);
-
-    const keyParts = [];
-    let keysLen = 16;
-    for (const [k] of kv) {
-      const kb = enc.encode(k);
-      const entry = new Uint8Array(8 + kb.length);
-      entry.set(u32(8 + kb.length), 0);
-      entry.set(str4('mdta'), 4);
-      entry.set(kb, 8);
-      keyParts.push(entry);
-      keysLen += entry.length;
-    }
-    const keysAtom = new Uint8Array(keysLen);
-    keysAtom.set(u32(keysLen), 0);
-    keysAtom.set(str4('keys'), 4);
-    keysAtom.set(u32(0), 8);
-    keysAtom.set(u32(kv.length), 12);
-    let kp = 16;
-    for (const part of keyParts) { keysAtom.set(part, kp); kp += part.length; }
-
-    const ilstParts = [];
-    let ilstLen = 8;
-    for (let i = 0; i < kv.length; i++) {
-      const vb = enc.encode(kv[i][1]);
-      const dataLen = 16 + vb.length;
-      const itemLen = 8 + dataLen;
-      const item = new Uint8Array(itemLen);
-      item.set(u32(itemLen), 0);
-      item.set(u32(i + 1), 4);
-      item.set(u32(dataLen), 8);
-      item.set(str4('data'), 12);
-      item.set(u32(1), 16);
-      item.set(u32(0), 20);
-      item.set(vb, 24);
-      ilstParts.push(item);
-      ilstLen += itemLen;
-    }
-    const ilstAtom = new Uint8Array(ilstLen);
-    ilstAtom.set(u32(ilstLen), 0);
-    ilstAtom.set(str4('ilst'), 4);
-    let ip = 8;
-    for (const part of ilstParts) { ilstAtom.set(part, ip); ip += part.length; }
-
-    const metaLen = 12 + hdlr.length + keysAtom.length + ilstAtom.length;
-    const udtaLen = 8 + metaLen;
-    const udta = new Uint8Array(udtaLen);
-    udta.set(u32(udtaLen), 0);
-    udta.set(str4('udta'), 4);
-    udta.set(u32(metaLen), 8);
-    udta.set(str4('meta'), 12);
-    udta.set(u32(0), 16);
-    let mp = 20;
-    udta.set(hdlr, mp); mp += hdlr.length;
-    udta.set(keysAtom, mp); mp += keysAtom.length;
-    udta.set(ilstAtom, mp);
-    return udta;
-  }
-
-  function injectFastImportUdtaIntoMp4(bytes) {
-    const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-    let pos = 0, moovPos = -1, moovSize = 0, mdatPos = -1;
-
-    while (pos + 8 <= bytes.byteLength) {
-      let sz = view.getUint32(pos, false);
-      const tp = String.fromCharCode(bytes[pos+4], bytes[pos+5], bytes[pos+6], bytes[pos+7]);
-      if (sz === 1) {
-        if (pos + 16 > bytes.byteLength) break;
-        sz = Number(view.getBigUint64(pos + 8, false));
-      } else if (sz === 0) {
-        sz = bytes.byteLength - pos;
-      }
-      if (tp === 'moov') { moovPos = pos; moovSize = sz; }
-      else if (tp === 'mdat') { mdatPos = pos; }
-      if (sz < 8) break;
-      pos += sz;
-    }
-
-    if (moovPos === -1) return bytes;
-
-    const udtaNew = buildByteDanceFastImportUdta();
-    const moovEnd = moovPos + moovSize;
-    const keptChunks = [];
-    let keptLen = 0;
-    let cpos = moovPos + 8;
-
-    while (cpos + 8 <= moovEnd) {
-      let csz = view.getUint32(cpos, false);
-      const ctp = String.fromCharCode(bytes[cpos+4], bytes[cpos+5], bytes[cpos+6], bytes[cpos+7]);
-      if (csz === 0) csz = moovEnd - cpos;
-      if (csz < 8 || cpos + csz > moovEnd) break;
-      if (ctp !== 'udta') {
-        const slice = bytes.subarray(cpos, cpos + csz);
-        keptChunks.push(slice);
-        keptLen += slice.length;
-      }
-      cpos += csz;
-    }
-
-    const newMoovSize = 8 + keptLen + udtaNew.length;
-    const delta = newMoovSize - moovSize;
-
-    const moovChildren = new Uint8Array(keptLen + udtaNew.length);
-    let offset = 0;
-    for (const ch of keptChunks) { moovChildren.set(ch, offset); offset += ch.length; }
-    moovChildren.set(udtaNew, offset);
-
-    if (mdatPos !== -1 && moovPos < mdatPos && delta !== 0) {
-      const cView = new DataView(moovChildren.buffer, moovChildren.byteOffset, moovChildren.byteLength);
-      const containers = { trak: 1, mdia: 1, minf: 1, stbl: 1, edts: 1, dinf: 1 };
-      (function fixOffsets(start, endIdx) {
-        let p = start;
-        while (p + 8 <= endIdx) {
-          const bsz = cView.getUint32(p, false);
-          const btp = String.fromCharCode(moovChildren[p+4], moovChildren[p+5], moovChildren[p+6], moovChildren[p+7]);
-          if (bsz < 8 || p + bsz > endIdx) break;
-          if (containers[btp]) {
-            fixOffsets(p + 8, p + bsz);
-          } else if (btp === 'stco') {
-            const count = cView.getUint32(p + 12, false);
-            for (let k = 0; k < count; k++) {
-              const op = p + 16 + k * 4;
-              if (op + 4 <= p + bsz) cView.setUint32(op, cView.getUint32(op, false) + delta, false);
-            }
-          } else if (btp === 'co64') {
-            const count = cView.getUint32(p + 12, false);
-            for (let k = 0; k < count; k++) {
-              const op = p + 16 + k * 8;
-              if (op + 8 <= p + bsz) cView.setBigUint64(op, cView.getBigUint64(op, false) + BigInt(delta), false);
-            }
-          }
-          p += bsz;
+    // If the file ends with our 69-byte ZILEM_OPTIMIZED free box, randomize the timestamp & ID in-place
+    // so every single upload has a 100% unique binary hash while keeping the exact 69-byte box structure!
+    if (bytes.byteLength >= 69) {
+      const tailOff = bytes.byteLength - 69;
+      if (
+        bytes[tailOff] === 0 && bytes[tailOff+1] === 0 && bytes[tailOff+2] === 0 && bytes[tailOff+3] === 0x45 &&
+        bytes[tailOff+4] === 0x66 && bytes[tailOff+5] === 0x72 && bytes[tailOff+6] === 0x65 && bytes[tailOff+7] === 0x65
+      ) {
+        const nowIso = new Date().toISOString(); // 24 chars e.g. 2026-10-16T10:15:30.123Z
+        const randId = String(Math.floor(1000 + Math.random() * 9000));
+        const str = 'ZILEM_OPTIMIZED/1 ' + nowIso + ' ' + randId + ' (2)_zilem.mp4';
+        const enc = new TextEncoder().encode(str);
+        if (enc.byteLength === 61) {
+          bytes.set(enc, tailOff + 8);
         }
-      })(0, moovChildren.byteLength);
+      }
     }
-
-    const randomSeed = new Uint8Array(16);
-    crypto.getRandomValues(randomSeed);
-    const freeBox = new Uint8Array(24);
-    freeBox.set([0, 0, 0, 24, 0x66, 0x72, 0x65, 0x65], 0);
-    freeBox.set(randomSeed, 8);
-
-    const out = new Uint8Array(moovPos + newMoovSize + (bytes.byteLength - moovEnd) + freeBox.byteLength);
-    const outView = new DataView(out.buffer);
-    out.set(bytes.subarray(0, moovPos), 0);
-    outView.setUint32(moovPos, newMoovSize, false);
-    out.set([0x6D, 0x6F, 0x6F, 0x76], moovPos + 4);
-    out.set(moovChildren, moovPos + 8);
-    out.set(bytes.subarray(moovEnd), moovPos + newMoovSize);
-    out.set(freeBox, moovPos + newMoovSize + (bytes.byteLength - moovEnd));
-    return out;
   }
 
   window.V7Patch = async function V7Patch(file) {
@@ -847,10 +506,9 @@ V7_PATCH_SCRIPT = r"""
     if (!window.__XUQING_BYPASS_ACTIVE__) {
       return ab;
     }
-    let bytes = new Uint8Array(ab);
+    const bytes = new Uint8Array(ab);
     try {
-      patchMp4AtomsFor1080pAnd120Fps(bytes);
-      bytes = injectFastImportUdtaIntoMp4(bytes);
+      patchMp4AtomsCleanly(bytes);
     } catch (_) {}
     return bytes.buffer;
   };
@@ -874,139 +532,10 @@ INJECT_SCRIPT = r"""
 """
 
 # WATERMARK_SCRIPT:
-# - Does NOT show `#xuqingxinnocent•Quality upload ✓ @xuqingxinnocent` in the Description box while you are preparing the video!
-# - Instead, when you click the "Post" button (or right as the video is being posted), it triggers the real `@xuqingxinnocent` mention selection in the background (with editor text hidden during the split-second auto-insert) AND syncs with V7_PATCH_SCRIPT's post payload injector so `@xuqingxinnocent` is a 100% real clickable mention on TikTok without ever cluttering your Description box while editing!
+# Clean no-op by default so TikTok's Post button and /item/create X-Bogus signature are NEVER intercepted or flagged by Bot/Spam filters!
 WATERMARK_SCRIPT = r"""
 (function() {
   'use strict';
-  if (window.__XUQING_WM_INSTALLED__) return;
-  window.__XUQING_WM_INSTALLED__ = true;
-
-  let wmEnabled = true;
-  let postIntercepted = false;
-
-  window.addEventListener('message', function(e) {
-    if (!e.data || typeof e.data !== 'object') return;
-    if (e.data.type === 'WM_SET_ACTIVE') {
-      wmEnabled = !!e.data.value;
-      window.__XUQING_WM_ACTIVE__ = wmEnabled;
-    }
-  });
-
-  function findCaptionEditor() {
-    const selectors = [
-      '.public-DraftEditor-content[contenteditable="true"]',
-      '[data-e2e="caption-container"] [contenteditable="true"]',
-      '[class*="caption"] [contenteditable="true"]',
-      '[class*="Caption"] [contenteditable="true"]',
-      'div[contenteditable="true"][role="combobox"]',
-      'div[contenteditable="true"]'
-    ];
-    for (const sel of selectors) {
-      const el = document.querySelector(sel);
-      if (el && el.offsetParent !== null) return el;
-    }
-    return null;
-  }
-
-  function isPostButton(el) {
-    if (!el) return false;
-    const btn = el.closest('button, [role="button"]');
-    if (!btn) return false;
-    const e2e = (btn.getAttribute('data-e2e') || '').toLowerCase();
-    const txt = (btn.innerText || btn.textContent || '').trim().toLowerCase();
-    return e2e.includes('post_video') || txt === 'post' || txt === 'upload' || txt === 'posting';
-  }
-
-  function pasteText(editor, text) {
-    editor.focus();
-    const dt = new DataTransfer();
-    dt.setData('text/plain', text);
-    editor.dispatchEvent(new ClipboardEvent('paste', {
-      clipboardData: dt,
-      bubbles: true,
-      cancelable: true
-    }));
-  }
-
-  function waitAndClickMentionOption(maxMs) {
-    return new Promise((resolve) => {
-      const start = Date.now();
-      const timer = setInterval(() => {
-        const items = document.querySelectorAll(
-          '[data-e2e*="mention"] li, [data-e2e*="at-user"] li, [class*="mention"] li, [class*="Mention"] li, [class*="at-item"], [class*="user-item"], [role="listbox"] [role="option"], [class*="suggestion"] div, [class*=" Popover"] li'
-        );
-        for (const item of items) {
-          const t = (item.innerText || item.textContent || '').toLowerCase();
-          if (t.includes('xuqingxinnocent') && item.offsetParent !== null) {
-            item.click();
-            clearInterval(timer);
-            return resolve(true);
-          }
-        }
-        if (Date.now() - start >= maxMs) {
-          clearInterval(timer);
-          resolve(false);
-        }
-      }, 80);
-    });
-  }
-
-  // Intercept click on the "Post" button so watermark + real clickable @xuqingxinnocent mention
-  // is only inserted at the exact moment of posting (never shown in Description beforehand!)
-  document.addEventListener('click', async function(e) {
-    if (!wmEnabled || postIntercepted) return;
-    if (!isPostButton(e.target)) return;
-
-    const btn = e.target.closest('button, [role="button"]');
-    const editor = findCaptionEditor();
-    if (!editor || !btn) return;
-
-    const currentText = (editor.innerText || editor.textContent || '');
-    if (currentText.includes('Quality upload') || currentText.includes('Quality Uploaded')) {
-      return;
-    }
-
-    // Pause the immediate Post click for ~600ms while we silently attach the watermark & clickable @mention
-    e.stopImmediatePropagation();
-    e.preventDefault();
-    postIntercepted = true;
-
-    try {
-      // Keep the watermark visually hidden in the Description box while inserting before submit
-      const hideStyle = document.createElement('style');
-      hideStyle.id = 'xuqing-silent-wm-style';
-      hideStyle.textContent = `
-        [data-e2e*="mention"], [class*="mention-list"], [class*="at-list"], [role="listbox"] {
-          opacity: 0 !important; pointer-events: none !important;
-        }
-      `;
-      document.head.appendChild(hideStyle);
-
-      editor.focus();
-      const sel = window.getSelection();
-      const range = document.createRange();
-      range.selectNodeContents(editor);
-      range.collapse(false);
-      sel.removeAllRanges();
-      sel.addRange(range);
-
-      const prefix = (currentText.length > 0 && !currentText.endsWith(' ')) ? ' ' : '';
-      pasteText(editor, prefix + '#xuqingxinnocent\u2022Quality upload \u2713 @xuqingxinnocent');
-
-      // If TikTok Studio pops up the @mention user list, click @xuqingxinnocent so DraftJS links the mention entity!
-      await waitAndClickMentionOption(750);
-
-      setTimeout(() => {
-        try { hideStyle.remove(); } catch (_) {}
-        btn.click();
-        setTimeout(() => { postIntercepted = false; }, 3000);
-      }, 80);
-    } catch (_) {
-      btn.click();
-      setTimeout(() => { postIntercepted = false; }, 3000);
-    }
-  }, true);
 })();
 """
 
@@ -1394,7 +923,11 @@ def apply_exact_quality3_fixed_structure(filepath, target_w=1080, target_h=1920)
         f.write(new_moov_box)
         f.write(EXACT_Q3_FREE_8B)
         f.write(mdat_bytes)
-        f.write(EXACT_Q3_TAIL_FREE_69B)
+        now_iso = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f")[:23] + "Z"
+        rand_id = str(uuid.uuid4().int)[:4]
+        dyn_tail_str = f"ZILEM_OPTIMIZED/1 {now_iso} {rand_id} (2)_zilem.mp4".encode("ascii")
+        dyn_tail_box = struct.pack(">I4s", 69, b"free") + dyn_tail_str[:61].ljust(61, b" ")
+        f.write(dyn_tail_box)
 
     return f"Rebuilt to Exact Quality_3_fixed_exact_q2_style (moov={new_moov_size}B, delta={delta}B)"
 
