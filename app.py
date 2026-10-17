@@ -755,7 +755,7 @@ EXACT_AVC1_FTYP_32B = bytes.fromhex("000000206674797069736f6d0000020069736f6d697
 EXACT_MVHD_120B = bytes.fromhex("000000786d7668640100000000000000000000000000000000000000000003e8ffffffffffffffff0001000001000000000000000000000000010000000000000000000000000000000100000000000000000000000000004000000000000000000000000000000000000000000000000000000000000003")
 EXACT_COLR_19B = bytes.fromhex("00000013636f6c726e636c7800010001000100")
 EXACT_PASP_16B = bytes.fromhex("00000010706173700000000100000001")
-EXACT_BTRT_20B = bytes.fromhex("00000014627472740000000001312d0001312d00")
+EXACT_BTRT_20B = bytes.fromhex("00000014627472740000000000e4e1c000b71b00")
 
 def build_apple_ilst_udta(method_name="xuqingxinnocent"):
     clean_name = (method_name or "xuqingxinnocent").strip()
@@ -980,9 +980,9 @@ def api_transcode():
         "-preset", "superfast",
         "-profile:v", "high",
         "-level:v", "5.2",
-        "-b:v", "20000k",
-        "-maxrate", "22000k",
-        "-bufsize", "40000k",
+        "-b:v", "12000k",
+        "-maxrate", "15000k",
+        "-bufsize", "24000k",
         "-x264-params", x264_params,
         "-pix_fmt", "yuv420p",
         "-color_range", "tv",
