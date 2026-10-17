@@ -943,11 +943,15 @@ def api_transcode():
     out_path = os.path.join(TEMP_DIR, f"out_{job_id}.mp4")
     f.save(in_path)
 
+    target_res = (request.form.get("target_res") or request.args.get("target_res") or "1000x2166").strip()
     vinfo = probe_video_info(in_path)
     in_w = int(vinfo.get("width", 1000) or 1000)
     in_h = int(vinfo.get("height", 2166) or 2166)
     is_landscape = in_w > in_h
-    target_w, target_h = (2166, 1000) if is_landscape else (1000, 2166)
+    if target_res == "1080x1920":
+        target_w, target_h = (1920, 1080) if is_landscape else (1080, 1920)
+    else:
+        target_w, target_h = (2166, 1000) if is_landscape else (1000, 2166)
 
     vf_chain = (
         f"scale={target_w}:{target_h}:flags=lanczos+accurate_rnd+full_chroma_int,"
@@ -976,9 +980,9 @@ def api_transcode():
         "-preset", "superfast",
         "-profile:v", "high",
         "-level:v", "5.2",
-        "-b:v", "43530k",
-        "-maxrate", "46000k",
-        "-bufsize", "87060k",
+        "-b:v", "20000k",
+        "-maxrate", "22000k",
+        "-bufsize", "40000k",
         "-x264-params", x264_params,
         "-pix_fmt", "yuv420p",
         "-color_range", "tv",
