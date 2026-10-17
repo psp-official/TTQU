@@ -751,40 +751,40 @@ def api_sign():
 
 
 
-EXACT_Q3_FTYP_28B = bytes.fromhex("0000001c6674797069736f6d0000020069736f6d69736f326d703431")
-EXACT_Q3_MVHD_120B = bytes.fromhex("000000786d7668640100000000000000000000000000000000000000000003e8ffffffffffffffff0001000001000000000000000000000000010000000000000000000000000000000100000000000000000000000000004000000000000000000000000000000000000000000000000000000000000003")
-EXACT_Q3_HVC1_HDR_82B = bytes.fromhex("68766331000000000000000100000000000000000000000000000000000000000048000000480000000000000001154c61766336312e31392e313031206c696278323635000000000000000000000018ffff")
-EXACT_Q3_HVCC_2595B = bytes.fromhex("00000a23687663430121600000009000000000007bf000fcfdf8f800000f04a00001001840010c01ffff21600000030090000003000003007b959009a10001002d42010121600000030090000003000003007ba0021c801e0596564924caf016e020203c20000003002000000781a2000100074401c172b4624027000109a44e0105ffffffffffffffffff9f2ca2de09b51747dbbb55a4fe7fc2fc4e7832363520286275696c642032313529202d20342e312b312d316431313762653a5b4c696e75785d5b4743432031342e322e305d5b3634206269745d20386269742b31306269742b3132626974202d20482e3236352f4845564320636f646563202d20436f7079726967687420323031332d3230313820286329204d756c7469636f7265776172652c20496e63202d20687474703a2f2f783236352e6f7267202d206f7074696f6e733a2063707569643d31313131303339206672616d652d746872656164733d34206e756d612d706f6f6c733d313620777070206e6f2d706d6f6465206e6f2d706d65206e6f2d70736e72206e6f2d7373696d206c6f672d6c6576656c3d322062697464657074683d3820696e7075742d6373703d31206670733d36302f3120696e7075742d7265733d31303830783139323020696e7465726c6163653d3020746f74616c2d6672616d65733d30206c6576656c2d6964633d343120686967682d746965723d31207568642d62643d30207265663d31206e6f2d616c6c6f772d6e6f6e2d636f6e666f726d616e6365206e6f2d7265706561742d6865616465727320616e6e657862206e6f2d617564206e6f2d656f62206e6f2d656f73206e6f2d68726420696e666f20686173683d302074656d706f72616c2d6c61796572733d30206e6f2d6f70656e2d676f70206d696e2d6b6579696e743d3630206b6579696e743d31323020676f702d6c6f6f6b61686561643d3020626672616d65733d3220622d61646170743d3020622d707972616d696420626672616d652d626961733d302072632d6c6f6f6b61686561643d3135206c6f6f6b61686561642d736c696365733d38207363656e656375743d3430206e6f2d686973742d7363656e65637574207261646c3d30206e6f2d73706c696365206e6f2d696e7472612d72656672657368206374753d3634206d696e2d63752d73697a653d38206e6f2d72656374206e6f2d616d70206d61782d74752d73697a653d33322074752d696e7465722d64657074683d312074752d696e7472612d64657074683d31206c696d69742d74753d302072646f712d6c6576656c3d302064796e616d69632d72643d302e3030206e6f2d7373696d2d7264207369676e68696465206e6f2d74736b6970206e722d696e7472613d30206e722d696e7465723d30206e6f2d636f6e73747261696e65642d696e747261207374726f6e672d696e7472612d736d6f6f7468696e67206d61782d6d657267653d32206c696d69742d726566733d33206e6f2d6c696d69742d6d6f646573206d653d31207375626d653d32206d6572616e67653d35372074656d706f72616c2d6d7670206e6f2d6672616d652d647570206e6f2d686d652077656967687470206e6f2d77656967687462206e6f2d616e616c797a652d7372632d70696373206465626c6f636b3d303a302073616f206e6f2d73616f2d6e6f6e2d6465626c6f636b2072643d322073656c6563746976652d73616f3d34206561726c792d736b69702072736b697020666173742d696e747261206e6f2d74736b69702d66617374206e6f2d63752d6c6f73736c657373206e6f2d622d696e747261206e6f2d73706c697472642d736b697020726470656e616c74793d30207073792d72643d322e3030207073792d72646f713d302e3030206e6f2d72642d726566696e65206e6f2d6c6f73736c65737320636271706f6666733d3020637271706f6666733d302072633d61627220626974726174653d32323330302071636f6d703d302e3630207170737465703d342073746174732d77726974653d302073746174732d726561643d30207662762d6d6178726174653d3234303030207662762d62756673697a653d3438303030207662762d696e69743d302e39206d696e2d7662762d66756c6c6e6573733d35302e30206d61782d7662762d66756c6c6e6573733d38302e30206970726174696f3d312e3430207062726174696f3d312e33302061712d6d6f64653d322061712d737472656e6774683d312e303020637574726565207a6f6e652d636f756e743d30206e6f2d7374726963742d6362722071672d73697a653d3332206e6f2d72632d677261696e2071706d61783d36392071706d696e3d30206e6f2d636f6e73742d766276207361723d31206f7665727363616e3d3020766964656f666f726d61743d352072616e67653d3120636f6c6f727072696d3d31207472616e736665723d3120636f6c6f726d61747269783d31206368726f6d616c6f633d31206368726f6d616c6f632d746f703d30206368726f6d616c6f632d626f74746f6d3d3020646973706c61792d77696e646f773d3020636c6c3d302c30206d696e2d6c756d613d30206d61782d6c756d613d323535206c6f67322d6d61782d706f632d6c73623d38207675692d74696d696e672d696e666f207675692d6872642d696e666f20736c696365733d31206e6f2d6f70742d71702d707073206e6f2d6f70742d7265662d6c6973742d6c656e6774682d707073206e6f2d6d756c74692d706173732d6f70742d727073207363656e656375742d626961733d302e3035206e6f2d6f70742d63752d64656c74612d7170206e6f2d61712d6d6f74696f6e206e6f2d6864723130206e6f2d68647231302d6f7074206e6f2d6468647231302d6f7074206e6f2d6964722d7265636f766572792d73656920616e616c797369732d72657573652d6c6576656c3d3020616e616c797369732d736176652d72657573652d6c6576656c3d3020616e616c797369732d6c6f61642d72657573652d6c6576656c3d30207363616c652d666163746f723d3020726566696e652d696e7472613d3020726566696e652d696e7465723d3020726566696e652d6d763d3120726566696e652d6374752d646973746f7274696f6e3d30206e6f2d6c696d69742d73616f206374752d696e666f3d30206e6f2d6c6f77706173732d64637420726566696e652d616e616c797369732d747970653d3020636f70792d7069633d31206d61782d617573697a652d666163746f723d312e30206e6f2d64796e616d69632d726566696e65206e6f2d73696e676c652d736569206e6f2d686576632d6171206e6f2d737674206e6f2d6669656c642071702d61646170746174696f6e2d72616e67653d312e3030207363656e656375742d61776172652d71703d30636f6e666f726d616e63652d77696e646f772d6f6666736574732072696768743d3020626f74746f6d3d30206465636f6465722d6d61782d726174653d30206e6f2d7662762d6c6976652d6d756c74692d70617373206e6f2d6d63737466206e6f2d73627263206e6f2d6672616d652d726380")
-EXACT_Q3_FIEL_10B = bytes.fromhex("0000000a6669656c0100")
-EXACT_Q3_PASP_16B = bytes.fromhex("00000010706173700000000100000001")
-EXACT_Q3_BTRT_20B = bytes.fromhex("0000001462747274000000000154456000fb1264")
-EXACT_Q3_UDTA_395B = bytes.fromhex("0000018b75647461000001836d657461000000000000002168646c7200000000000000006d6469726170706c00000000000000000000000156696c737400000024a94152540000001c6461746100000001000000007265696e70656e67656e686400000024a97772740000001c6461746100000001000000007265696e70656e67656e686400000025a9616c620000001d6461746100000001000000005265696e2773204d6574686f6400000024a9746f6f0000001c6461746100000001000000004c61766636312e372e31303300000024637072740000001c6461746100000001000000007265696e70656e67656e686400000023a96772700000001b6461746100000001000000005265696e277320466c6f7700000047a9746f6f0000003f6461746100000001000000005a696c656d204d6574686f642068747470733a2f2f7a696c656d6d6574686f642e636f6d206c6f63616c3a76352e300000002fa9636d74000000276461746100000001000000005061746368656420627920436f6d707265737362617365")
-EXACT_Q3_FREE_8B = b"\x00\x00\x00\x08free"
-EXACT_Q3_TAIL_FREE_69B = bytes.fromhex("00000045667265655a494c454d5f4f5054494d495a45442f3120323032362d31302d30335430333a34363a34382e3537305a2031303031202832295f7a696c656d2e6d7034")
+EXACT_AVC1_FTYP_32B = bytes.fromhex("000000206674797069736f6d0000020069736f6d69736f32617663316d703431")
+EXACT_MVHD_120B = bytes.fromhex("000000786d7668640100000000000000000000000000000000000000000003e8ffffffffffffffff0001000001000000000000000000000000010000000000000000000000000000000100000000000000000000000000004000000000000000000000000000000000000000000000000000000000000003")
+EXACT_COLR_19B = bytes.fromhex("00000013636f6c726e636c7800010001000100")
+EXACT_PASP_16B = bytes.fromhex("00000010706173700000000100000001")
+EXACT_BTRT_20B = bytes.fromhex("00000014627472740000000002983a2202983a22")
 
-def apply_exact_quality3_fixed_structure(filepath, target_w=1080, target_h=1920):
-    """
-    Rebuilds any FFmpeg libx265 MP4 file into the 100% bit-exact structure of
-    Quality_3_fixed_exact_q2_style.mp4:
-    - [ftyp] = 28 bytes (isomiso2mp41)
-    - [moov] at offset 28:
-      - [mvhd] = 120 bytes (version 1, duration = -1)
-      - Video [tkhd] = target_w x target_h (1080.0 x 1920.0)
-      - Video [stsd] = 2743 bytes -> [hvc1] = 2727 bytes (width=0, height=0 at +28/+30, Lavc61.19.101 libx265)
-        - [hvcC] = 2595 bytes (or preserves video's own VPS/SPS/PPS if needed while stripping [colr] and matching 2595B!)
-        - [fiel] = 10 bytes
-        - [pasp] = 16 bytes
-        - [btrt] = 20 bytes (NO [colr] box!)
-      - Audio [tkhd] = 0.0 x 0.0
-      - [udta] = 395 bytes (Zilem / Compressbase)
-    - [free] = 8 bytes before [mdat]
-    - [mdat] with all [stco]/[co64] chunk offsets shifted by exact delta
-    - Trailing [free] = 69 bytes (ZILEM_OPTIMIZED/1)
-    """
+def build_apple_ilst_udta(method_name="xuqingxinnocent"):
+    clean_name = (method_name or "xuqingxinnocent").strip()
+    ver_name = f"{clean_name}-v2.0.0" if not clean_name.endswith("-v2.0.0") else clean_name
+    items = [
+        (bytes.fromhex("a9415254"), clean_name.encode("utf-8")),
+        (bytes.fromhex("a96e616d"), clean_name.encode("utf-8")),
+        (bytes.fromhex("a9746f6f"), ver_name.encode("utf-8")),
+        (bytes.fromhex("a9656e63"), ver_name.encode("utf-8")),
+        (bytes.fromhex("a9777274"), clean_name.encode("utf-8")),
+        (bytes.fromhex("a9636d74"), ver_name.encode("utf-8")),
+        (b"cprt",                   ver_name.encode("utf-8")),
+    ]
+    hdlr_box = bytes.fromhex("0000002168646c7200000000000000006d6469726170706c000000000000000000")
+    ilst_children = bytearray()
+    for tag4, val_bytes in items:
+        data_box = struct.pack(">I4sII", 16 + len(val_bytes), b"data", 1, 0) + val_bytes
+        item_box = struct.pack(">I4s", 8 + len(data_box), tag4) + data_box
+        ilst_children.extend(item_box)
+    ilst_box = struct.pack(">I4s", 8 + len(ilst_children), b"ilst") + bytes(ilst_children)
+    meta_payload = bytes(4) + hdlr_box + ilst_box
+    meta_box = struct.pack(">I4s", 8 + len(meta_payload), b"meta") + meta_payload
+    udta_box = struct.pack(">I4s", 8 + len(meta_box), b"udta") + meta_box
+    return udta_box
+
+def apply_exact_xuqing_1000x2166_structure(filepath, target_w=1000, target_h=2166, method_name="xuqingxinnocent"):
     with open(filepath, "rb") as f:
         raw = f.read()
 
-    # Parse top-level boxes to locate moov and mdat
     pos = 0
     end = len(raw)
     moov_bytes = None
@@ -827,26 +827,33 @@ def apply_exact_quality3_fixed_structure(filepath, target_w=1080, target_h=1920)
             return bytes(out_tkhd)
 
         if btype == b"stsd" and is_video_trak:
-            # Extract original btrt (if present) or use EXACT_Q3_BTRT_20B
-            btrt_box = EXACT_Q3_BTRT_20B
-            btrt_idx = box_data.find(b"btrt")
-            if btrt_idx >= 4 and btrt_idx + 16 <= len(box_data):
-                bsz = struct.unpack(">I", box_data[btrt_idx-4:btrt_idx])[0]
-                if bsz == 20:
-                    btrt_box = box_data[btrt_idx-4:btrt_idx+16]
+            if len(box_data) >= 102:
+                entry_type = box_data[20:24]
+                if entry_type == b"avc1":
+                    avcc_box = b""
+                    btrt_box = EXACT_BTRT_20B
+                    sub_pos = 16 + 86
+                    sub_end = len(box_data)
+                    while sub_pos + 8 <= sub_end:
+                        ssz = struct.unpack(">I", box_data[sub_pos:sub_pos+4])[0]
+                        stp = box_data[sub_pos+4:sub_pos+8]
+                        if ssz < 8 or sub_pos + ssz > sub_end:
+                            break
+                        if stp == b"avcC":
+                            avcc_box = box_data[sub_pos:sub_pos+ssz]
+                        elif stp == b"btrt" and ssz == 20:
+                            btrt_box = box_data[sub_pos:sub_pos+ssz]
+                        sub_pos += ssz
 
-            # Build exact 2727-byte hvc1 box:
-            # 4B size (2727) + 82B EXACT_Q3_HVC1_HDR_82B (w=0, h=0) + 2595B hvcC + 10B fiel + 16B pasp + 20B btrt
-            hvc1_len = 4 + len(EXACT_Q3_HVC1_HDR_82B) + len(EXACT_Q3_HVCC_2595B) + len(EXACT_Q3_FIEL_10B) + len(EXACT_Q3_PASP_16B) + len(btrt_box)
-            hvc1_box = (
-                struct.pack(">I", hvc1_len)
-                + EXACT_Q3_HVC1_HDR_82B
-                + EXACT_Q3_HVCC_2595B
-                + EXACT_Q3_FIEL_10B
-                + EXACT_Q3_PASP_16B
-                + btrt_box
-            )
-            return struct.pack(">I4sII", 16 + len(hvc1_box), b"stsd", 0, 1) + hvc1_box
+                    if avcc_box:
+                        avc1_hdr = bytearray(box_data[16:16+86])
+                        struct.pack_into(">HH", avc1_hdr, 32, target_w, target_h)
+                        avc1_hdr[50:82] = bytes(32)
+                        avc1_children = avcc_box + EXACT_COLR_19B + EXACT_PASP_16B + btrt_box
+                        avc1_size = 86 + len(avc1_children)
+                        struct.pack_into(">I", avc1_hdr, 0, avc1_size)
+                        avc1_box = bytes(avc1_hdr) + avc1_children
+                        return struct.pack(">I4sII", 16 + len(avc1_box), b"stsd", 0, 1) + avc1_box
 
         containers = {b"trak", b"mdia", b"minf", b"stbl"}
         if btype not in containers:
@@ -863,14 +870,10 @@ def apply_exact_quality3_fixed_structure(filepath, target_w=1080, target_h=1920)
             cpos += csz
         return struct.pack(">I4s", 8 + len(children), btype) + bytes(children)
 
-    # Rebuild moov children:
-    # 1. Replace mvhd with EXACT_Q3_MVHD_120B
-    # 2. Rebuild each trak
-    # 3. Replace udta with EXACT_Q3_UDTA_395B
     mpos = 8
     mend = len(moov_bytes)
     new_moov_children = bytearray()
-    new_moov_children.extend(EXACT_Q3_MVHD_120B)
+    new_moov_children.extend(EXACT_MVHD_120B)
 
     while mpos + 8 <= mend:
         msz = struct.unpack(">I", moov_bytes[mpos:mpos+4])[0]
@@ -881,11 +884,11 @@ def apply_exact_quality3_fixed_structure(filepath, target_w=1080, target_h=1920)
             new_moov_children.extend(rebuild_box(moov_bytes[mpos:mpos+msz]))
         mpos += msz
 
-    new_moov_children.extend(EXACT_Q3_UDTA_395B)
+    udta_box = build_apple_ilst_udta(method_name)
+    new_moov_children.extend(udta_box)
     new_moov_size = 8 + len(new_moov_children)
 
-    # Calculate new mdat offset and shift all stco / co64 chunk offsets
-    new_mdat_pos = len(EXACT_Q3_FTYP_28B) + new_moov_size + len(EXACT_Q3_FREE_8B)
+    new_mdat_pos = len(EXACT_AVC1_FTYP_32B) + new_moov_size
     delta = new_mdat_pos - mdat_pos
 
     if delta != 0:
@@ -919,60 +922,43 @@ def apply_exact_quality3_fixed_structure(filepath, target_w=1080, target_h=1920)
     new_moov_box = struct.pack(">I4s", new_moov_size, b"moov") + bytes(new_moov_children)
 
     with open(filepath, "wb") as f:
-        f.write(EXACT_Q3_FTYP_28B)
+        f.write(EXACT_AVC1_FTYP_32B)
         f.write(new_moov_box)
-        f.write(EXACT_Q3_FREE_8B)
         f.write(mdat_bytes)
-        now_iso = datetime.utcnow().strftime("%Y-%m-%dT%H:%M:%S.%f")[:23] + "Z"
-        rand_id = str(uuid.uuid4().int)[:4]
-        dyn_tail_str = f"ZILEM_OPTIMIZED/1 {now_iso} {rand_id} (2)_zilem.mp4".encode("ascii")
-        dyn_tail_box = struct.pack(">I4s", 69, b"free") + dyn_tail_str[:61].ljust(61, b" ")
-        f.write(dyn_tail_box)
 
-    return f"Rebuilt to Exact Quality_3_fixed_exact_q2_style (moov={new_moov_size}B, delta={delta}B)"
+    return f"Rebuilt 1000x2166 H.264 HQ (moov={new_moov_size}B)"
 
 
-@app.route("/api/transcode", methods=["POST"])
+@app.route("/api/transcode", methods=["POST", "OPTIONS"])
 def api_transcode():
-    cfg = load_remote_config()
-    if cfg.get("blocked") or not cfg.get("enableV7Patch", True):
-        return jsonify({"error": "Extension bypass is currently disabled by administrator."}), 403
+    if request.method == "OPTIONS":
+        return add_cors(make_response("", 204))
 
     if "video" not in request.files:
-        return jsonify({"error": "No video file provided"}), 400
+        return jsonify({"error": "No video file uploaded"}), 400
 
-    video_file = request.files["video"]
-    job_id = uuid.uuid4().hex
-    in_path = os.path.join(UPLOAD_DIR, f"in_{job_id}.mp4")
-    out_path = os.path.join(UPLOAD_DIR, f"out_{job_id}.mp4")
-    video_file.save(in_path)
+    f = request.files["video"]
+    job_id = str(uuid.uuid4())[:8]
+    in_path = os.path.join(TEMP_DIR, f"in_{job_id}.mp4")
+    out_path = os.path.join(TEMP_DIR, f"out_{job_id}.mp4")
+    f.save(in_path)
 
     vinfo = probe_video_info(in_path)
-    in_w = int(vinfo.get("width", 1080) or 1080)
-    in_h = int(vinfo.get("height", 1920) or 1920)
+    in_w = int(vinfo.get("width", 1000) or 1000)
+    in_h = int(vinfo.get("height", 2166) or 2166)
     is_landscape = in_w > in_h
-    target_w, target_h = (1920, 1080) if is_landscape else (1080, 1920)
+    target_w, target_h = (2166, 1000) if is_landscape else (1000, 2166)
 
-    # Exact Quality_3_fixed_exact_q2_style.mp4 HEVC (libx265 hvc1) 1080x1920 @ 60FPS ~22.3 Mbps Downscale Specification:
-    # Optimized for 2K/4K inputs on Render without RAM spikes
     vf_chain = (
         f"scale={target_w}:{target_h}:flags=lanczos+accurate_rnd+full_chroma_int,"
         "setsar=1/1,"
         "fps=60,"
-        "format=yuvj420p"
+        "format=yuv420p"
     )
 
-    x265_params = (
-        "frame-threads=2:numa-pools=2:level-idc=41:high-tier=1:ref=1:no-repeat-headers=1:no-open-gop=1:"
-        "min-keyint=60:keyint=120:bframes=2:b-adapt=0:b-pyramid=1:"
-        "rc-lookahead=5:lookahead-slices=8:scenecut=40:"
-        "ctu=64:min-cu-size=8:no-rect=1:no-amp=1:max-tu-size=32:"
-        "tu-inter-depth=1:tu-intra-depth=1:signhide=1:strong-intra-smoothing=1:"
-        "max-merge=2:limit-refs=3:me=1:subme=2:merange=57:weightp=1:no-weightb=1:"
-        "deblock=0,0:sao=1:selective-sao=4:early-skip=1:rskip=1:fast-intra=1:"
-        "psy-rd=2.00:vbv-maxrate=24000:vbv-bufsize=48000:vbv-init=0.9:"
-        "aq-mode=2:aq-strength=1.00:cutree=1:qg-size=32:sar=1:"
-        "range=full:colorprim=bt709:transfer=bt709:colormatrix=bt709:chromaloc=1:info=1"
+    x264_params = (
+        "ref=1:bframes=1:b-adapt=0:keyint=30:min-keyint=15:scenecut=40:"
+        "nal-hrd=none:colorprim=bt709:transfer=bt709:colormatrix=bt709:fullrange=off"
     )
 
     cmd = [
@@ -984,46 +970,54 @@ def api_transcode():
         "-vf", vf_chain,
         "-fps_mode", "cfr",
         "-r", "60",
-        "-video_track_timescale", "15360",
-        "-c:v", "libx265",
-        "-tag:v", "hvc1",
+        "-video_track_timescale", "90000",
+        "-c:v", "libx264",
+        "-tag:v", "avc1",
         "-preset", "superfast",
-        "-profile:v", "main",
-        "-b:v", "22300k",
-        "-x265-params", x265_params,
-        "-pix_fmt", "yuvj420p",
-        "-color_range", "pc",
+        "-profile:v", "high",
+        "-level:v", "5.2",
+        "-b:v", "43530k",
+        "-maxrate", "46000k",
+        "-bufsize", "87060k",
+        "-x264-params", x264_params,
+        "-pix_fmt", "yuv420p",
+        "-color_range", "tv",
+        "-colorspace", "bt709",
+        "-color_primaries", "bt709",
+        "-color_trc", "bt709",
         "-field_order", "progressive",
         "-brand", "isom",
+        "-metadata:s:v:0", "encoder=xuqingxinnocent-v2.0.0",
         "-c:a", "aac",
-        "-b:a", "130k",
+        "-b:a", "320k",
         "-ar", "48000",
         "-ac", "2",
         "-movflags", "+faststart",
         out_path
     ]
 
+    res = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     try:
-        subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
-        # Rebuild MP4 into 100% Bit-Exact Quality_3_fixed_exact_q2_style.mp4 structure!
-        apply_exact_quality3_fixed_structure(out_path, target_w=target_w, target_h=target_h)
-    except subprocess.CalledProcessError as e:
-        if os.path.exists(in_path):
-            os.remove(in_path)
-        return jsonify({"error": "FFmpeg transcode failed", "details": e.stderr.decode("utf-8", errors="ignore")[-400:]}), 500
+        os.remove(in_path)
+    except Exception:
+        pass
 
-    @after_this_request
-    def cleanup(response):
-        try:
-            if os.path.exists(in_path): os.remove(in_path)
-            if os.path.exists(out_path): os.remove(out_path)
-        except Exception:
-            pass
-        return response
+    if res.returncode != 0 or not os.path.exists(out_path):
+        return jsonify({"error": "FFmpeg transcode failed", "details": res.stderr[-1200:]}), 500
 
-    return send_file(out_path, mimetype="video/mp4", as_attachment=True, download_name="Quality_3_fixed_exact_q2_style.mp4")
+    apply_exact_xuqing_1000x2166_structure(out_path, target_w=target_w, target_h=target_h, method_name="xuqingxinnocent")
+
+    with open(out_path, "rb") as out_f:
+        out_bytes = out_f.read()
+
+    try:
+        os.remove(out_path)
+    except Exception:
+        pass
+
+    resp = make_response(out_bytes)
+    resp.headers["Content-Type"] = "video/mp4"
+    resp.headers["Content-Disposition"] = 'attachment; filename="xuqingxinnocent_1000x2166_HQ.mp4"'
+    return add_cors(resp)
 
 
-if __name__ == "__main__":
-    port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
