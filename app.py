@@ -427,17 +427,13 @@ V7_PATCH_SCRIPT = r"""
           const w = wFixed >>> 16;
           const h = hFixed >>> 16;
           if (w > 0 && h > 0) {
-            if ((w > 1080 || h > 1920) && w <= 7680 && h <= 7680) {
-              targetW = h >= w ? 1080 : 1920;
-              targetH = h >= w ? 1920 : 1080;
-              view.setUint32(widthOffset, targetW << 16, false);
-              view.setUint32(heightOffset, targetH << 16, false);
-            } else if (w < 360 || h < 360) {
+            if (w < 360 || h < 360) {
               targetW = h >= w ? 1080 : 1920;
               targetH = h >= w ? 1920 : 1080;
               view.setUint32(widthOffset, targetW << 16, false);
               view.setUint32(heightOffset, targetH << 16, false);
             } else {
+              // Preserve any resolution (1440x1080, 1080x1440, 1000x2166, 1080x1920, etc.) as-is!
               targetW = w;
               targetH = h;
             }
@@ -459,7 +455,7 @@ V7_PATCH_SCRIPT = r"""
           if (boxSz >= 86 && boxSz <= 16384 && isReservedZero) {
             const cw = view.getUint16(i + 28, false);
             const ch = view.getUint16(i + 30, false);
-            if (cw === 0 || ch === 0 || cw < 360 || ch < 360 || cw > 1920 || ch > 1920) {
+            if (cw === 0 || ch === 0 || cw < 360 || ch < 360 || cw > 4096 || ch > 4096) {
               view.setUint16(i + 28, targetW, false);
               view.setUint16(i + 30, targetH, false);
             }
@@ -755,7 +751,7 @@ EXACT_AVC1_FTYP_32B = bytes.fromhex("000000206674797069736f6d0000020069736f6d697
 EXACT_MVHD_120B = bytes.fromhex("000000786d7668640100000000000000000000000000000000000000000003e8ffffffffffffffff0001000001000000000000000000000000010000000000000000000000000000000100000000000000000000000000004000000000000000000000000000000000000000000000000000000000000003")
 EXACT_COLR_19B = bytes.fromhex("00000013636f6c726e636c7800010001000100")
 EXACT_PASP_16B = bytes.fromhex("00000010706173700000000100000001")
-EXACT_BTRT_20B = bytes.fromhex("00000014627472740000000000e4e1c000b71b00")
+EXACT_BTRT_20B = bytes.fromhex("00000014627472740000000001312d0001312d00")
 
 def build_apple_ilst_udta(method_name="xuqingxinnocent"):
     clean_name = (method_name or "xuqingxinnocent").strip()
@@ -950,6 +946,10 @@ def api_transcode():
     is_landscape = in_w > in_h
     if target_res == "1080x1920":
         target_w, target_h = (1920, 1080) if is_landscape else (1080, 1920)
+    elif target_res == "1440x1080":
+        target_w, target_h = (1440, 1080) if is_landscape else (1080, 1440)
+    elif target_res in ("auto", "original"):
+        target_w, target_h = (in_w, in_h)
     else:
         target_w, target_h = (2166, 1000) if is_landscape else (1000, 2166)
 
@@ -980,9 +980,9 @@ def api_transcode():
         "-preset", "superfast",
         "-profile:v", "high",
         "-level:v", "5.2",
-        "-b:v", "12000k",
-        "-maxrate", "15000k",
-        "-bufsize", "24000k",
+        "-b:v", "20000k",
+        "-maxrate", "22000k",
+        "-bufsize", "40000k",
         "-x264-params", x264_params,
         "-pix_fmt", "yuv420p",
         "-color_range", "tv",
